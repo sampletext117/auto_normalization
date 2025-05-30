@@ -10,7 +10,7 @@ import json
 # Импорт модулей программы
 from models import (
     Attribute, FunctionalDependency, Relation,
-    NormalForm, NormalizationResult
+    NormalForm, NormalizationResult, MultivaluedDependency
 )
 from fd_algorithms import FDAlgorithms
 from analyzer import NormalFormAnalyzer
@@ -114,6 +114,7 @@ class NormalizationGUI:
         # Данные
         self.attributes: List[Attribute] = []
         self.functional_dependencies: List[FunctionalDependency] = []
+        self.multivalued_dependencies: List[MultivaluedDependency] = []
         self.current_relation: Optional[Relation] = None
         self.normalization_result: Optional[NormalizationResult] = None
 
@@ -203,63 +204,66 @@ class NormalizationGUI:
         ttk.Button(attr_buttons, text="Очистить все", command=self.clear_attributes).pack(side='left', padx=5)
 
         # --- MODIFIED: Фрейм для функциональных зависимостей с измененным макетом ---
-        fd_main_label_frame = ttk.LabelFrame(self.input_frame, text="Функциональные зависимости", padding=10)
-        # fd_main_label_frame теперь будет занимать оставшееся место
+        fd_main_label_frame = ttk.LabelFrame(self.input_frame, text="Зависимости", padding=10)
         fd_main_label_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Верхний контейнер для горизонтального расположения: [Выбор ФЗ] | [Список ФЗ]
-        top_fd_container = ttk.Frame(fd_main_label_frame)
-        top_fd_container.pack(fill='both', expand=True, pady=(0, 5))
+        # Главный горизонтальный контейнер
+        main_hbox = ttk.Frame(fd_main_label_frame)
+        main_hbox.pack(fill='both', expand=True)
 
-        # Левая часть: Панели выбора атрибутов и кнопка "Добавить"
-        fd_selection_panel = ttk.Frame(top_fd_container)
-        fd_selection_panel.pack(side='left', fill='y', padx=(0, 10))  # Fill vertically
+        # --- Левая колонка: Выбор атрибутов ---
+        selection_vbox = ttk.Frame(main_hbox)
+        selection_vbox.pack(side='left', fill='y', padx=(0, 10))
 
-        # Контейнер для детерминанта
-        determinant_outer_container = ttk.Frame(fd_selection_panel, width=170, height=130)  # Задаем размеры здесь
-        determinant_outer_container.pack(side='left', fill='none', expand=False,
-                                         padx=2)  # Не расширяем, фиксированный размер
-        determinant_outer_container.pack_propagate(False)  # Важно!
-        ttk.Label(determinant_outer_container, text="Детерминант:").pack(anchor='nw', pady=(0, 1))
-        self.determinant_cb_frame_scrollable = ScrollableFrame(determinant_outer_container, relief="sunken",
-                                                               borderwidth=1)
+        # Детерминант
+        ttk.Label(selection_vbox, text="Детерминант:").pack(anchor='w')
+        det_frame_container = ttk.Frame(selection_vbox, width=180, height=140)
+        det_frame_container.pack(fill='both', expand=True)
+        det_frame_container.pack_propagate(False)
+        self.determinant_cb_frame_scrollable = ScrollableFrame(det_frame_container, relief="sunken", borderwidth=1)
         self.determinant_cb_frame_scrollable.pack(fill='both', expand=True)
         self.determinant_cb_frame = self.determinant_cb_frame_scrollable.interior
 
-        # Панель для стрелки и кнопки "Добавить ФЗ"
-        arrow_add_fd_panel = ttk.Frame(fd_selection_panel)
-        arrow_add_fd_panel.pack(side='left', fill='y', padx=7, anchor='center')  # fill='y'
-        ttk.Label(arrow_add_fd_panel, text="→", font=("Arial", 18)).pack(expand=True,
-                                                                         anchor='center')  # Центрируем стрелку
-        ttk.Button(arrow_add_fd_panel, text="Добавить ФЗ", command=self.add_functional_dependency).pack(side='bottom',
-                                                                                                        pady=(5, 0))
-
-        # Контейнер для зависимой части
-        dependent_outer_container = ttk.Frame(fd_selection_panel, width=170, height=130)  # Задаем размеры здесь
-        dependent_outer_container.pack(side='left', fill='none', expand=False, padx=2)  # Не расширяем
-        dependent_outer_container.pack_propagate(False)  # Важно!
-        ttk.Label(dependent_outer_container, text="Зависимые:").pack(anchor='nw', pady=(0, 1))
-        self.dependent_cb_frame_scrollable = ScrollableFrame(dependent_outer_container, relief="sunken", borderwidth=1)
+        # Зависимая часть
+        ttk.Label(selection_vbox, text="Зависимая часть:").pack(anchor='w', pady=(10, 0))
+        dep_frame_container = ttk.Frame(selection_vbox, width=180, height=140)
+        dep_frame_container.pack(fill='both', expand=True)
+        dep_frame_container.pack_propagate(False)
+        self.dependent_cb_frame_scrollable = ScrollableFrame(dep_frame_container, relief="sunken", borderwidth=1)
         self.dependent_cb_frame_scrollable.pack(fill='both', expand=True)
         self.dependent_cb_frame = self.dependent_cb_frame_scrollable.interior
 
-        # Правая часть: Список введенных ФЗ
-        fd_list_display_panel = ttk.Frame(top_fd_container)
-        fd_list_display_panel.pack(side='left', fill='both', expand=True)
+        # --- Центральная колонка: Кнопки добавления ---
+        action_vbox = ttk.Frame(main_hbox)
+        action_vbox.pack(side='left', fill='y', padx=5, anchor='center')
 
-        ttk.Label(fd_list_display_panel, text="Введенные ФЗ:").pack(anchor='nw')
-        self.fd_listbox = tk.Listbox(fd_list_display_panel,
-                                     height=7)  # Высота списка = высота панелей выбора - место под заголовок
-        self.fd_listbox.pack(fill='both', expand=True, pady=(2, 0))
+        ttk.Button(action_vbox, text="→\nДобавить ФЗ", command=self.add_functional_dependency, width=12).pack(pady=5)
+        ttk.Button(action_vbox, text="→→\nДобавить МЗД", command=self.add_multivalued_dependency, width=12).pack(pady=5)
 
-        # Нижняя панель для кнопок управления списком ФЗ (Удалить, Очистить)
-        fd_list_buttons_panel = ttk.Frame(fd_main_label_frame)
-        fd_list_buttons_panel.pack(fill='x', pady=(8, 0))  # Отступ сверху
-        ttk.Button(fd_list_buttons_panel, text="Удалить выбранную ФЗ",
-                   command=self.remove_fd).pack(side='left', padx=5)
-        ttk.Button(fd_list_buttons_panel, text="Очистить все ФЗ",
-                   command=self.clear_fds).pack(side='left', padx=5)
-        # --- END MODIFIED FD Layout ---
+        # --- Правая колонка: Списки зависимостей ---
+        display_vbox = ttk.Frame(main_hbox)
+        display_vbox.pack(side='left', fill='both', expand=True)
+
+        # Список ФЗ
+        fd_list_frame = ttk.LabelFrame(display_vbox, text="Функциональные зависимости (ФЗ)")
+        fd_list_frame.pack(fill='both', expand=True, pady=(0, 5))
+        self.fd_listbox = tk.Listbox(fd_list_frame, height=6)
+        self.fd_listbox.pack(side='top', fill='both', expand=True, padx=2, pady=2)
+        fd_buttons = ttk.Frame(fd_list_frame)
+        fd_buttons.pack(fill='x', side='bottom')
+        ttk.Button(fd_buttons, text="Удалить", command=self.remove_fd).pack(side='left', padx=5, pady=2)
+        ttk.Button(fd_buttons, text="Очистить", command=self.clear_fds).pack(side='left', padx=5, pady=2)
+
+        # Список МЗД
+        mvd_list_frame = ttk.LabelFrame(display_vbox, text="Многозначные зависимости (МЗД)")
+        mvd_list_frame.pack(fill='both', expand=True, pady=(5, 0))
+        self.mvd_listbox = tk.Listbox(mvd_list_frame, height=6)
+        self.mvd_listbox.pack(side='top', fill='both', expand=True, padx=2, pady=2)
+        mvd_buttons = ttk.Frame(mvd_list_frame)
+        mvd_buttons.pack(fill='x', side='bottom')
+        ttk.Button(mvd_buttons, text="Удалить", command=self.remove_mvd).pack(side='left', padx=5, pady=2)
+        ttk.Button(mvd_buttons, text="Очистить", command=self.clear_mvds).pack(side='left', padx=5, pady=2)
+
 
     def create_analysis_widgets(self):
         """Создание виджетов для анализа"""
@@ -312,12 +316,11 @@ class NormalizationGUI:
 
     # MODIFIED: Helper to update FD attribute checkboxes
     def _update_fd_attribute_checkboxes(self):
-        """Обновляет чекбоксы для выбора атрибутов ФЗ."""
-        # self.determinant_cb_frame и self.dependent_cb_frame теперь внутренние фреймы ScrollableFrame
-
-        for widget in self.determinant_cb_frame.winfo_children():  # Очищаем внутренний фрейм
+        """Обновляет чекбоксы для выбора атрибутов ФЗ и МЗД."""
+        # Очистка существующих чекбоксов
+        for widget in self.determinant_cb_frame.winfo_children():
             widget.destroy()
-        for widget in self.dependent_cb_frame.winfo_children():  # Очищаем внутренний фрейм
+        for widget in self.dependent_cb_frame.winfo_children():
             widget.destroy()
 
         self.determinant_vars.clear()
@@ -326,29 +329,24 @@ class NormalizationGUI:
         for attr in self.attributes:
             # Чекбокс для детерминанта
             det_var = tk.BooleanVar()
-            # Добавляем чекбокс во внутренний фрейм (self.determinant_cb_frame)
             det_cb = ttk.Checkbutton(self.determinant_cb_frame, text=attr.name, variable=det_var)
-            det_cb.pack(anchor='w', padx=2, pady=1)
+            det_cb.pack(anchor='w', padx=2)
             self.determinant_vars.append((attr, det_var))
-            # Привязываем события прокрутки к новому чекбоксу, чтобы они передавались на канвас
+            # Привязываем прокрутку
             self.determinant_cb_frame_scrollable.bind_child_for_scrolling(det_cb)
 
             # Чекбокс для зависимой части
             dep_var = tk.BooleanVar()
-            # Добавляем чекбокс во внутренний фрейм (self.dependent_cb_frame)
             dep_cb = ttk.Checkbutton(self.dependent_cb_frame, text=attr.name, variable=dep_var)
-            dep_cb.pack(anchor='w', padx=2, pady=1)
+            dep_cb.pack(anchor='w', padx=2)
             self.dependent_vars.append((attr, dep_var))
-            # Привязываем события прокрутки к новому чекбоксу
+            # Привязываем прокрутку
             self.dependent_cb_frame_scrollable.bind_child_for_scrolling(dep_cb)
 
-        # Обновляем scrollregion после добавления всех элементов
-        # Это важно, чтобы ScrollableFrame знал об изменении размера содержимого
-        self.determinant_cb_frame_scrollable.canvas.update_idletasks()
+        # Обновляем область прокрутки после добавления всех элементов
+        self.root.update_idletasks()
         self.determinant_cb_frame_scrollable.canvas.config(
             scrollregion=self.determinant_cb_frame_scrollable.canvas.bbox("all"))
-
-        self.dependent_cb_frame_scrollable.canvas.update_idletasks()
         self.dependent_cb_frame_scrollable.canvas.config(
             scrollregion=self.dependent_cb_frame_scrollable.canvas.bbox("all"))
 
@@ -482,29 +480,74 @@ class NormalizationGUI:
         self.functional_dependencies.clear()
         self.fd_listbox.delete(0, tk.END)
 
+    def add_multivalued_dependency(self):
+        """Добавление многозначной зависимости"""
+        det_attrs = {attr for attr, var in self.determinant_vars if var.get()}
+        dep_attrs = {attr for attr, var in self.dependent_vars if var.get()}
+
+        if not det_attrs or not dep_attrs:
+            messagebox.showwarning("Ошибка", "Выберите атрибуты для детерминанта и зависимой части.")
+            return
+
+        # Проверка на пересечение атрибутов. Для нетривиальной МЗД они должны быть непересекающимися.
+        if not det_attrs.isdisjoint(dep_attrs):
+            messagebox.showwarning("Ошибка", "Детерминант и зависимая часть МЗД не должны содержать одинаковых атрибутов.")
+            return
+
+        mvd = MultivaluedDependency(det_attrs, dep_attrs)
+        self.multivalued_dependencies.append(mvd)
+        self.mvd_listbox.insert(tk.END, str(mvd))
+
+        # Очистка выделения
+        for _, var in self.determinant_vars:
+            var.set(False)
+        for _, var in self.dependent_vars:
+            var.set(False)
+
+    def remove_mvd(self):
+        """Удаление выбранной МЗД"""
+        selection = self.mvd_listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        self.multivalued_dependencies.pop(index)
+        self.mvd_listbox.delete(index)
+
+    def clear_mvds(self):
+        """Очистка всех МЗД"""
+        self.multivalued_dependencies.clear()
+        self.mvd_listbox.delete(0, tk.END)
+
     def perform_analysis(self):
         """Выполнение анализа отношения"""
         if not self.attributes:
             messagebox.showwarning("Ошибка", "Добавьте атрибуты отношения")
             return
 
+        # Создание отношения
         self.current_relation = Relation(
             name=self.relation_name_var.get(),
             attributes=self.attributes.copy(),
-            functional_dependencies=self.functional_dependencies.copy()
+            functional_dependencies=self.functional_dependencies.copy(),
+            # ИСПРАВЛЕНИЕ: Добавлена передача многозначных зависимостей
+            multivalued_dependencies=self.multivalued_dependencies.copy()
         )
 
+        # Анализ
         analyzer = NormalFormAnalyzer(self.current_relation)
         report = analyzer.get_analysis_report()
 
+        # Дополнительная информация
         report += "\n" + "=" * 50 + "\n"
         report += "Дополнительный анализ:\n\n"
 
+        # Минимальное покрытие
         minimal_cover = FDAlgorithms.minimal_cover(self.functional_dependencies)
         report += f"Минимальное покрытие ({len(minimal_cover)} ФЗ):\n"
         for fd in minimal_cover:
             report += f"  - {fd}\n"
 
+        # Отображение результатов
         self.analysis_text.delete(1.0, tk.END)
         self.analysis_text.insert(1.0, report)
 
@@ -701,16 +744,15 @@ class NormalizationGUI:
     def new_project(self):
         """Создание нового проекта"""
         if messagebox.askyesno("Новый проект", "Очистить все данные?"):
-            self.clear_attributes() # Очистит атрибуты и чекбоксы ФЗ
-            self.clear_fds()      # Очистит список ФЗ
+            self.clear_attributes()
+            self.clear_fds()
+            self.clear_mvds()  # <<< ДОБАВИТЬ ЭТУ СТРОКУ
             self.relation_name_var.set("Отношение1")
             self.analysis_text.delete(1.0, tk.END)
             self.normalization_text.delete(1.0, tk.END)
             self.results_text.delete(1.0, tk.END)
             self.current_relation = None
             self.normalization_result = None
-            self.attr_name_var.set("")
-            self.is_pk_var.set(False)
 
 
     # MODIFIED: load_example
