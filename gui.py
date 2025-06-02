@@ -2,6 +2,8 @@
 """
 Графический интерфейс для программы автоматической нормализации реляционных БД
 """
+import io
+from contextlib import redirect_stdout
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from typing import List, Set, Optional, Tuple # Added Tuple
@@ -16,6 +18,10 @@ from fd_algorithms import FDAlgorithms
 from analyzer import NormalFormAnalyzer
 from decomposition import Decomposer
 from visualization import VisualizationWindow, add_visualization_to_gui # MODIFIED: Added add_visualization_to_gui
+from data_test import test_decomposition, DB_PARAMS
+from performance_test import run_performance_test, plot_performance
+
+
 
 
 class ScrollableFrame(ttk.Frame):
@@ -117,6 +123,20 @@ class NormalizationGUI:
         self.multivalued_dependencies: List[MultivaluedDependency] = []
         self.current_relation: Optional[Relation] = None
         self.normalization_result: Optional[NormalizationResult] = None
+
+        self.db_host_var = tk.StringVar(value="")
+        self.db_port_var = tk.StringVar(value="")
+        self.db_name_var = tk.StringVar(value="")
+        self.db_user_var = tk.StringVar(value="")
+        self.db_password_var = tk.StringVar(value="")
+        # Жёстко захардкоженные "дефолтные" креды
+        self.default_db_params = {
+            'host': 'localhost',
+            'port': '5432',
+            'dbname': 'postgres',
+            'user': 'postgres',
+            'password': 'Iamtaskforce1'
+        }
 
         # MODIFIED: Data for FD checkboxes
         self.determinant_vars: List[Tuple[Attribute, tk.BooleanVar]] = []
@@ -298,10 +318,57 @@ class NormalizationGUI:
         export_frame = ttk.Frame(self.results_frame)
         export_frame.pack(fill='x', padx=5, pady=5)
 
+        rows_frame = ttk.Frame(self.results_frame)
+        rows_frame.pack(fill='x', padx=5, pady=(0,5))
+        ttk.Label(rows_frame, text="Количество строк для теста:").pack(side='left', padx=(0,5))
+        self.test_rows_var = tk.StringVar(value="1000")
+        ttk.Entry(rows_frame, textvariable=self.test_rows_var, width=10).pack(side='left')
+        # Кнопка «Тест декомпозиции» (уже у вас есть, но лучше переместить именно сюда):
+        ttk.Button(rows_frame, text="Тест декомпозиции", command=self.run_decomposition_test).pack(side='left', padx=10)
+
+        ttk.Button(export_frame, text="Тест производительности", command=self.run_performance_gui).pack(side='left',
+                                                                                                        padx=5)
+
+        # ========== Блок ввода кредов для БД ==========
+        creds_frame = ttk.LabelFrame(self.results_frame, text="Параметры подключения к БД", padding=10)
+        creds_frame.pack(fill='x', padx=5, pady=(5, 0))
+
+        # Host
+        ttk.Label(creds_frame, text="Host:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(creds_frame, textvariable=self.db_host_var, width=15).grid(row=0, column=1, padx=5, pady=2)
+        # Port
+        ttk.Label(creds_frame, text="Port:").grid(row=0, column=2, sticky='w', padx=5, pady=2)
+        ttk.Entry(creds_frame, textvariable=self.db_port_var, width=7).grid(row=0, column=3, padx=5, pady=2)
+        # DB Name
+        ttk.Label(creds_frame, text="DB Name:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(creds_frame, textvariable=self.db_name_var, width=15).grid(row=1, column=1, padx=5, pady=2)
+        # User
+        ttk.Label(creds_frame, text="User:").grid(row=1, column=2, sticky='w', padx=5, pady=2)
+        ttk.Entry(creds_frame, textvariable=self.db_user_var, width=15).grid(row=1, column=3, padx=5, pady=2)
+        # Password
+        ttk.Label(creds_frame, text="Password:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(creds_frame, textvariable=self.db_password_var, show="*", width=15).grid(row=2, column=1, padx=5, pady=2)
+
+        # Кнопка "По умолчанию"
+        def on_default_db_params():
+            self.db_host_var.set(self.default_db_params['host'])
+            self.db_port_var.set(self.default_db_params['port'])
+            self.db_name_var.set(self.default_db_params['dbname'])
+            self.db_user_var.set(self.default_db_params['user'])
+            self.db_password_var.set(self.default_db_params['password'])
+        ttk.Button(creds_frame, text="По умолчанию", command=on_default_db_params).grid(
+            row=2, column=3, padx=5, pady=2, sticky='e'
+        )
+        # =================================================
+
+
         ttk.Button(export_frame, text="Экспорт в SQL",
                    command=self.export_to_sql).pack(side='left', padx=5)
         ttk.Button(export_frame, text="Сохранить отчет",
                    command=self.save_report).pack(side='left', padx=5)
+
+
+
 
         self.results_text = scrolledtext.ScrolledText(self.results_frame, wrap=tk.WORD)
         self.results_text.pack(fill='both', expand=True, padx=5, pady=5)
@@ -711,7 +778,53 @@ class NormalizationGUI:
         if filename:
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(self.generate_sql())
-            messagebox.showinfo("Успешно", f"SQL экспортирован в {filename}")
+            messagebox.showinfo("Успешно", f"SQL экспортирован в {filename}")\
+
+
+    def run_decomposition_test(self):
+        """Запустить тест на без­потерьность декомпозиции и вывести лог во всплывающем окне."""
+        if not self.normalization_result:
+            messagebox.showwarning("Ошибка", "Сначала выполните нормализацию.")
+            return
+
+        # Считаем, сколько строк нужно сгенерировать
+        try:
+            num_rows = int(self.test_rows_var.get())
+            if num_rows <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Неверный ввод", "Количество строк должно быть положительным целым числом.")
+            return
+
+        orig_rel = self.normalization_result.original_relation
+        normalized = self.normalization_result.decomposed_relations
+
+        # Перехватим весь stdout, который печатает test_decomposition
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                test_decomposition(orig_rel, normalized, num_rows)
+        except Exception as e:
+            buf.write("\n[ERROR] При выполнении test_decomposition произошла ошибка:\n")
+            buf.write(str(e))
+        log = buf.getvalue()
+
+        # Показать результат во всплывающем окне с прокруткой
+        popup = tk.Toplevel(self.root)
+        popup.title("Результат теста декомпозиции")
+        popup.geometry("700x500")
+
+        lbl = ttk.Label(popup, text=f"Лог теста (строк: {num_rows}):", font=("Arial", 10, "bold"))
+        lbl.pack(anchor='nw', padx=5, pady=(5, 0))
+
+        txt = scrolledtext.ScrolledText(popup, wrap=tk.NONE)
+        txt.pack(fill='both', expand=True, padx=5, pady=5)
+        txt.insert("1.0", log)
+        txt.configure(state="disabled")
+
+        ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
+
+
 
     def save_report(self):
         """Сохранение отчета"""
@@ -746,13 +859,20 @@ class NormalizationGUI:
         if messagebox.askyesno("Новый проект", "Очистить все данные?"):
             self.clear_attributes()
             self.clear_fds()
-            self.clear_mvds()  # <<< ДОБАВИТЬ ЭТУ СТРОКУ
+            self.clear_mvds()  # очистка МЗД
             self.relation_name_var.set("Отношение1")
             self.analysis_text.delete(1.0, tk.END)
             self.normalization_text.delete(1.0, tk.END)
             self.results_text.delete(1.0, tk.END)
             self.current_relation = None
             self.normalization_result = None
+            # Сброс полей подключений
+            self.db_host_var.set("")
+            self.db_port_var.set("")
+            self.db_name_var.set("")
+            self.db_user_var.set("")
+            self.db_password_var.set("")
+
 
 
     # MODIFIED: load_example
