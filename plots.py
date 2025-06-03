@@ -39,9 +39,9 @@ plt.style.use('seaborn-v0_8-whitegrid') # Используем стиль для
 
 # График 1: Время выполнения от количества атрибутов (N)
 plt.figure(figsize=(12, 7)) # Немного увеличим размер для лучшей читаемости
-plt.plot(n_values, analysis_time_vs_n_my_algo, marker='o', linestyle='-', color='dodgerblue', label='Время анализа (Мой алгоритм)')
-plt.plot(n_values, decomposition_time_vs_n_my_algo, marker='s', linestyle='--', color='orangered', label='Время декомпозиции (Мой алгоритм)')
-plt.plot(n_values, jmath_time_vs_n, marker='^', linestyle=':', color='green', label='Время декомпозиции (JMathNorm)')
+plt.plot(n_values, analysis_time_vs_n_my_algo, marker='o', linestyle='-', color='dodgerblue', label='Время анализа')
+plt.plot(n_values, decomposition_time_vs_n_my_algo, marker='s', linestyle='--', color='orangered', label='Время декомпозиции')
+# plt.plot(n_values, jmath_time_vs_n, marker='^', linestyle=':', color='green', label='Время декомпозиции (JMathNorm)')
 
 plt.title('Зависимость времени выполнения от количества атрибутов (N)', fontsize=16)
 plt.xlabel('Количество атрибутов (N)', fontsize=12)
@@ -54,9 +54,9 @@ plt.show()
 
 # График 2: Время выполнения от количества функциональных зависимостей (M)
 plt.figure(figsize=(12, 7)) # Немного увеличим размер
-plt.plot(m_values, analysis_time_vs_m_my_algo, marker='o', linestyle='-', color='forestgreen', label='Время анализа (Мой алгоритм)')
-plt.plot(m_values, decomposition_time_vs_m_my_algo, marker='s', linestyle='--', color='purple', label='Время декомпозиции (Мой алгоритм)')
-plt.plot(m_values, jmath_time_vs_m, marker='^', linestyle=':', color='brown', label='Время декомпозиции (JMathNorm)')
+plt.plot(m_values, analysis_time_vs_m_my_algo, marker='o', linestyle='-', color='forestgreen', label='Время анализа')
+plt.plot(m_values, decomposition_time_vs_m_my_algo, marker='s', linestyle='--', color='purple', label='Время декомпозиции')
+# plt.plot(m_values, jmath_time_vs_m, marker='^', linestyle=':', color='brown', label='Время декомпозиции (JMathNorm)')
 
 plt.title('Зависимость времени выполнения от количества ФЗ (M)', fontsize=16)
 plt.xlabel('Количество функциональных зависимостей (M)', fontsize=12)
