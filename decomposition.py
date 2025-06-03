@@ -122,7 +122,6 @@ class Decomposer:
 
         steps = []
 
-        # Шаг 1: Найти минимальное покрытие
         minimal_fds = FDAlgorithms.minimal_cover(relation.functional_dependencies)
 
         # Шаг 2: Для каждой ФЗ создать отношение

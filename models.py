@@ -79,18 +79,18 @@ class Relation:
     multivalued_dependencies: List[MultivaluedDependency] = field(default_factory=list)
 
     def get_attribute_by_name(self, name: str) -> Optional[Attribute]:
-        """Получить атрибут по имени"""
+        """Получаем атрибут по имени"""
         for attr in self.attributes:
             if attr.name == name:
                 return attr
         return None
 
     def get_primary_key(self) -> Set[Attribute]:
-        """Получить первичный ключ"""
+        """Получаем первичный ключ"""
         return {attr for attr in self.attributes if attr.is_primary_key}
 
     def get_all_attributes_set(self) -> Set[Attribute]:
-        """Получить все атрибуты как множество"""
+        """Получаем все атрибуты как множество"""
         return set(self.attributes)
 
     def __repr__(self):

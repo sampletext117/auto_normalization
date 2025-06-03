@@ -48,15 +48,10 @@ class ScrollableFrame(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Привязка событий колеса мыши к холсту и внутреннему фрейму
         self._bind_mouse_wheel_events(self.canvas)
         self._bind_mouse_wheel_events(self.interior)
-        # Примечание: дочерние элементы, добавляемые в self.interior, также должны иметь привязку,
-        # если они "перехватывают" события мыши.
 
     def _on_mouse_wheel(self, event, target_canvas):
-        """Обрабатывает прокрутку колеса мыши для Windows и macOS."""
-        # Проверяем, находится ли курсор над этим компонентом прокрутки
         widget_under_mouse = self.winfo_containing(event.x_root, event.y_root)
         if widget_under_mouse:
             current_widget = widget_under_mouse
@@ -72,11 +67,10 @@ class ScrollableFrame(ttk.Frame):
             if not is_relevant:
                 return
 
-        if event.delta == 0: return  # Некоторые события могут иметь delta = 0
+        if event.delta == 0: return
         target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_mouse_wheel_linux(self, event, target_canvas, direction):
-        """Обрабатывает прокрутку колеса мыши для Linux (кнопки 4 и 5)."""
         widget_under_mouse = self.winfo_containing(event.x_root, event.y_root)
         if widget_under_mouse:
             current_widget = widget_under_mouse
@@ -94,8 +88,6 @@ class ScrollableFrame(ttk.Frame):
         target_canvas.yview_scroll(direction, "units")
 
     def _bind_mouse_wheel_events(self, widget_to_bind):
-        """Привязывает события прокрутки к указанному виджету."""
-        # Для Windows и macOS
         widget_to_bind.bind("<MouseWheel>",
                             lambda e: self._on_mouse_wheel(e, self.canvas), add="+")
         # Для Linux
@@ -105,7 +97,6 @@ class ScrollableFrame(ttk.Frame):
                             lambda e: self._on_mouse_wheel_linux(e, self.canvas, 1), add="+")
 
     def bind_child_for_scrolling(self, child_widget):
-        """Рекурсивно привязывает события прокрутки к дочернему виджету и его потомкам."""
         self._bind_mouse_wheel_events(child_widget)
         for child in child_widget.winfo_children():
             self.bind_child_for_scrolling(child)
@@ -148,7 +139,6 @@ class NormalizationGUI:
         self.create_widgets()
 
     def create_menu(self):
-        """Создание меню"""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
@@ -164,45 +154,35 @@ class NormalizationGUI:
         help_menu.add_command(label="О программе", command=self.show_about)
 
     def create_widgets(self):
-        """Создание основных виджетов"""
-        # Главный контейнер с вкладками
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Вкладка ввода данных
         self.input_frame = ttk.Frame(notebook)
         notebook.add(self.input_frame, text="Ввод данных")
         self.create_input_widgets()
 
-        # Вкладка анализа
         self.analysis_frame = ttk.Frame(notebook)
         notebook.add(self.analysis_frame, text="Анализ")
         self.create_analysis_widgets()
 
-        # Вкладка нормализации
         self.normalization_frame = ttk.Frame(notebook)
         notebook.add(self.normalization_frame, text="Нормализация")
         self.create_normalization_widgets()
 
-        # Вкладка результатов
         self.results_frame = ttk.Frame(notebook)
         notebook.add(self.results_frame, text="Результаты")
         self.create_results_widgets()
 
     def create_input_widgets(self):
-        """Создание виджетов для ввода данных"""
-        # Фрейм для названия отношения (без изменений)
         name_frame = ttk.LabelFrame(self.input_frame, text="Отношение", padding=10)
         name_frame.pack(fill='x', padx=5, pady=5)
         ttk.Label(name_frame, text="Название:").pack(side='left', padx=5)
         self.relation_name_var = tk.StringVar(value="Отношение1")
         ttk.Entry(name_frame, textvariable=self.relation_name_var, width=30).pack(side='left', padx=5)
 
-        # Фрейм для атрибутов (без изменений в этой части)
         attr_frame = ttk.LabelFrame(self.input_frame, text="Атрибуты", padding=10)
         attr_frame.pack(fill='x', padx=5,
-                        pady=5)  # Изменено на fill='x', чтобы не занимал слишком много места по вертикали
-        # ... (остальная часть фрейма атрибутов без изменений) ...
+                        pady=5)
         attr_control = ttk.Frame(attr_frame)
         attr_control.pack(fill='x', pady=5)
         ttk.Label(attr_control, text="Имя:").pack(side='left', padx=5)
@@ -223,19 +203,15 @@ class NormalizationGUI:
         ttk.Button(attr_buttons, text="Удалить выбранный", command=self.remove_attribute).pack(side='left', padx=5)
         ttk.Button(attr_buttons, text="Очистить все", command=self.clear_attributes).pack(side='left', padx=5)
 
-        # --- MODIFIED: Фрейм для функциональных зависимостей с измененным макетом ---
         fd_main_label_frame = ttk.LabelFrame(self.input_frame, text="Зависимости", padding=10)
         fd_main_label_frame.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # Главный горизонтальный контейнер
         main_hbox = ttk.Frame(fd_main_label_frame)
         main_hbox.pack(fill='both', expand=True)
 
-        # --- Левая колонка: Выбор атрибутов ---
         selection_vbox = ttk.Frame(main_hbox)
         selection_vbox.pack(side='left', fill='y', padx=(0, 10))
 
-        # Детерминант
         ttk.Label(selection_vbox, text="Детерминант:").pack(anchor='w')
         det_frame_container = ttk.Frame(selection_vbox, width=180, height=140)
         det_frame_container.pack(fill='both', expand=True)
@@ -244,7 +220,6 @@ class NormalizationGUI:
         self.determinant_cb_frame_scrollable.pack(fill='both', expand=True)
         self.determinant_cb_frame = self.determinant_cb_frame_scrollable.interior
 
-        # Зависимая часть
         ttk.Label(selection_vbox, text="Зависимая часть:").pack(anchor='w', pady=(10, 0))
         dep_frame_container = ttk.Frame(selection_vbox, width=180, height=140)
         dep_frame_container.pack(fill='both', expand=True)
@@ -253,18 +228,16 @@ class NormalizationGUI:
         self.dependent_cb_frame_scrollable.pack(fill='both', expand=True)
         self.dependent_cb_frame = self.dependent_cb_frame_scrollable.interior
 
-        # --- Центральная колонка: Кнопки добавления ---
         action_vbox = ttk.Frame(main_hbox)
         action_vbox.pack(side='left', fill='y', padx=5, anchor='center')
 
         ttk.Button(action_vbox, text="→\nДобавить ФЗ", command=self.add_functional_dependency, width=12).pack(pady=5)
         ttk.Button(action_vbox, text="→→\nДобавить МЗД", command=self.add_multivalued_dependency, width=12).pack(pady=5)
 
-        # --- Правая колонка: Списки зависимостей ---
+
         display_vbox = ttk.Frame(main_hbox)
         display_vbox.pack(side='left', fill='both', expand=True)
 
-        # Список ФЗ
         fd_list_frame = ttk.LabelFrame(display_vbox, text="Функциональные зависимости (ФЗ)")
         fd_list_frame.pack(fill='both', expand=True, pady=(0, 5))
         self.fd_listbox = tk.Listbox(fd_list_frame, height=6)
@@ -274,7 +247,6 @@ class NormalizationGUI:
         ttk.Button(fd_buttons, text="Удалить", command=self.remove_fd).pack(side='left', padx=5, pady=2)
         ttk.Button(fd_buttons, text="Очистить", command=self.clear_fds).pack(side='left', padx=5, pady=2)
 
-        # Список МЗД
         mvd_list_frame = ttk.LabelFrame(display_vbox, text="Многозначные зависимости (МЗД)")
         mvd_list_frame.pack(fill='both', expand=True, pady=(5, 0))
         self.mvd_listbox = tk.Listbox(mvd_list_frame, height=6)
@@ -286,7 +258,6 @@ class NormalizationGUI:
 
 
     def create_analysis_widgets(self):
-        """Создание виджетов для анализа"""
         control_frame = ttk.Frame(self.analysis_frame)
         control_frame.pack(fill='x', padx=5, pady=5)
 
@@ -297,7 +268,6 @@ class NormalizationGUI:
         self.analysis_text.pack(fill='both', expand=True, padx=5, pady=5)
 
     def create_normalization_widgets(self):
-        """Создание виджетов для нормализации"""
         control_frame = ttk.LabelFrame(self.normalization_frame, text="Параметры нормализации", padding=10)
         control_frame.pack(fill='x', padx=5, pady=5)
 
@@ -314,7 +284,6 @@ class NormalizationGUI:
         self.normalization_text.pack(fill='both', expand=True, padx=5, pady=5)
 
     def create_results_widgets(self):
-        """Создание виджетов для отображения результатов"""
         export_frame = ttk.Frame(self.results_frame)
         export_frame.pack(fill='x', padx=5, pady=5)
 
@@ -349,7 +318,6 @@ class NormalizationGUI:
         ttk.Label(creds_frame, text="Password:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
         ttk.Entry(creds_frame, textvariable=self.db_password_var, show="*", width=15).grid(row=2, column=1, padx=5, pady=2)
 
-        # Кнопка "По умолчанию"
         def on_default_db_params():
             self.db_host_var.set(self.default_db_params['host'])
             self.db_port_var.set(self.default_db_params['port'])
@@ -359,7 +327,6 @@ class NormalizationGUI:
         ttk.Button(creds_frame, text="По умолчанию", command=on_default_db_params).grid(
             row=2, column=3, padx=5, pady=2, sticky='e'
         )
-        # =================================================
 
 
         ttk.Button(export_frame, text="Экспорт в SQL",
@@ -373,18 +340,14 @@ class NormalizationGUI:
         self.results_text = scrolledtext.ScrolledText(self.results_frame, wrap=tk.WORD)
         self.results_text.pack(fill='both', expand=True, padx=5, pady=5)
 
-        # MODIFIED: Add visualization button if the method was injected
         if hasattr(self, 'create_visualization_button'):
             self.create_visualization_button()
         else:
-            # This case should ideally not happen if add_visualization_to_gui is called correctly
             print("Warning: Visualization tools not loaded.")
 
 
-    # MODIFIED: Helper to update FD attribute checkboxes
     def _update_fd_attribute_checkboxes(self):
         """Обновляет чекбоксы для выбора атрибутов ФЗ и МЗД."""
-        # Очистка существующих чекбоксов
         for widget in self.determinant_cb_frame.winfo_children():
             widget.destroy()
         for widget in self.dependent_cb_frame.winfo_children():
@@ -394,23 +357,18 @@ class NormalizationGUI:
         self.dependent_vars.clear()
 
         for attr in self.attributes:
-            # Чекбокс для детерминанта
             det_var = tk.BooleanVar()
             det_cb = ttk.Checkbutton(self.determinant_cb_frame, text=attr.name, variable=det_var)
             det_cb.pack(anchor='w', padx=2)
             self.determinant_vars.append((attr, det_var))
-            # Привязываем прокрутку
             self.determinant_cb_frame_scrollable.bind_child_for_scrolling(det_cb)
 
-            # Чекбокс для зависимой части
             dep_var = tk.BooleanVar()
             dep_cb = ttk.Checkbutton(self.dependent_cb_frame, text=attr.name, variable=dep_var)
             dep_cb.pack(anchor='w', padx=2)
             self.dependent_vars.append((attr, dep_var))
-            # Привязываем прокрутку
             self.dependent_cb_frame_scrollable.bind_child_for_scrolling(dep_cb)
 
-        # Обновляем область прокрутки после добавления всех элементов
         self.root.update_idletasks()
         self.determinant_cb_frame_scrollable.canvas.config(
             scrollregion=self.determinant_cb_frame_scrollable.canvas.bbox("all"))
@@ -418,13 +376,11 @@ class NormalizationGUI:
             scrollregion=self.dependent_cb_frame_scrollable.canvas.bbox("all"))
 
     def add_attribute(self):
-        """Добавление атрибута"""
         name = self.attr_name_var.get().strip()
         if not name:
             messagebox.showwarning("Ошибка", "Введите имя атрибута")
             return
 
-        # MODIFIED: Проверка уникальности по self.attributes
         for existing_attr in self.attributes:
             if existing_attr.name == name:
                 messagebox.showwarning("Ошибка", "Атрибут с таким именем уже существует")
@@ -442,20 +398,18 @@ class NormalizationGUI:
             list_text += " [PK]"
         self.attr_listbox.insert(tk.END, list_text)
 
-        # MODIFIED: Обновление чекбоксов для ФЗ
         self._update_fd_attribute_checkboxes()
 
         self.attr_name_var.set("")
         self.is_pk_var.set(False)
 
     def remove_attribute(self):
-        """Удаление выбранного атрибута"""
         selection = self.attr_listbox.curselection()
         if not selection:
             return
 
         index = selection[0]
-        attr_to_remove = self.attributes[index] # Get attribute object
+        attr_to_remove = self.attributes[index]
 
         for fd in self.functional_dependencies:
             if attr_to_remove in fd.determinant or attr_to_remove in fd.dependent:
@@ -466,11 +420,9 @@ class NormalizationGUI:
         self.attributes.pop(index)
         self.attr_listbox.delete(index)
 
-        # MODIFIED: Обновление чекбоксов для ФЗ
         self._update_fd_attribute_checkboxes()
 
     def clear_attributes(self):
-        """Очистка всех атрибутов"""
         if self.functional_dependencies:
             messagebox.showwarning("Ошибка",
                                    "Сначала удалите все функциональные зависимости")
@@ -479,12 +431,10 @@ class NormalizationGUI:
         self.attributes.clear()
         self.attr_listbox.delete(0, tk.END)
 
-        # MODIFIED: Обновление чекбоксов для ФЗ
         self._update_fd_attribute_checkboxes()
 
-    # MODIFIED: Методы для работы с ФЗ
+
     def add_functional_dependency(self):
-        """Добавление функциональной зависимости из чекбоксов"""
         determinant_attrs: Set[Attribute] = set()
         for attr, var in self.determinant_vars:
             if var.get():
@@ -505,11 +455,7 @@ class NormalizationGUI:
         if dependent_attrs.issubset(determinant_attrs):
             messagebox.showinfo("Информация",
                                 "Это тривиальная зависимость (все зависимые атрибуты содержатся в детерминанте).")
-            # Можно решить, добавлять ли их. Для анализа они обычно не нужны.
-            # return
 
-        # Проверка на то, что атрибут не является одновременно детерминантом и зависимым сам по себе (X -> X)
-        # или что детерминант и зависимая часть полностью идентичны
         if determinant_attrs == dependent_attrs:
              messagebox.showwarning("Ошибка", "Детерминант и зависимая часть не могут быть полностью идентичны для нетривиальной ФЗ.")
              return
@@ -517,7 +463,6 @@ class NormalizationGUI:
 
         fd = FunctionalDependency(determinant_attrs, dependent_attrs)
 
-        # Проверка на дубликат
         if any(fd.determinant == existing_fd.determinant and fd.dependent == existing_fd.dependent
                for existing_fd in self.functional_dependencies):
             messagebox.showwarning("Ошибка", "Такая функциональная зависимость уже существует.")
@@ -526,14 +471,12 @@ class NormalizationGUI:
         self.functional_dependencies.append(fd)
         self.fd_listbox.insert(tk.END, str(fd))
 
-        # Очистка чекбоксов
         for _, var in self.determinant_vars:
             var.set(False)
         for _, var in self.dependent_vars:
             var.set(False)
 
     def remove_fd(self):
-        """Удаление выбранной ФЗ"""
         selection = self.fd_listbox.curselection()
         if not selection:
             return
@@ -543,12 +486,10 @@ class NormalizationGUI:
         self.fd_listbox.delete(index)
 
     def clear_fds(self):
-        """Очистка всех ФЗ"""
         self.functional_dependencies.clear()
         self.fd_listbox.delete(0, tk.END)
 
     def add_multivalued_dependency(self):
-        """Добавление многозначной зависимости"""
         det_attrs = {attr for attr, var in self.determinant_vars if var.get()}
         dep_attrs = {attr for attr, var in self.dependent_vars if var.get()}
 
@@ -556,7 +497,6 @@ class NormalizationGUI:
             messagebox.showwarning("Ошибка", "Выберите атрибуты для детерминанта и зависимой части.")
             return
 
-        # Проверка на пересечение атрибутов. Для нетривиальной МЗД они должны быть непересекающимися.
         if not det_attrs.isdisjoint(dep_attrs):
             messagebox.showwarning("Ошибка", "Детерминант и зависимая часть МЗД не должны содержать одинаковых атрибутов.")
             return

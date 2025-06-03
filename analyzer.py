@@ -23,16 +23,7 @@ class NormalFormAnalyzer:
         return prime_attrs
 
     def check_1nf(self) -> Tuple[bool, List[str]]:
-        """
-        Проверка первой нормальной формы
-
-        Returns:
-            (соответствует_1НФ, список_нарушений)
-        """
         violations = []
-
-        # В нашей модели предполагаем, что все значения атомарны
-        # В реальности здесь была бы проверка на составные/множественные значения
 
         if not self.relation.attributes:
             violations.append("Отношение не содержит атрибутов")
@@ -45,15 +36,8 @@ class NormalFormAnalyzer:
         return len(violations) == 0, violations
 
     def check_2nf(self) -> Tuple[bool, List[str]]:
-        """
-        Проверка второй нормальной формы
-
-        Returns:
-            (соответствует_2НФ, список_нарушений)
-        """
         violations = []
 
-        # Сначала проверяем 1НФ
         is_1nf, nf1_violations = self.check_1nf()
         if not is_1nf:
             violations.extend(nf1_violations)
@@ -80,12 +64,6 @@ class NormalFormAnalyzer:
         return len(violations) == 0, violations
 
     def check_3nf(self) -> Tuple[bool, List[str]]:
-        """
-        Проверка третьей нормальной формы
-
-        Returns:
-            (соответствует_3НФ, список_нарушений)
-        """
         violations = []
 
         # Сначала проверяем 2НФ
@@ -118,12 +96,6 @@ class NormalFormAnalyzer:
         return len(violations) == 0, violations
 
     def check_bcnf(self) -> Tuple[bool, List[str]]:
-        """
-        Проверка нормальной формы Бойса-Кодда
-
-        Returns:
-            (соответствует_НФБК, список_нарушений)
-        """
         violations = []
 
         # Сначала проверяем 3НФ
@@ -152,12 +124,6 @@ class NormalFormAnalyzer:
         return len(violations) == 0, violations
 
     def check_4nf(self) -> Tuple[bool, List[str]]:
-        """
-        Проверка четвертой нормальной формы
-
-        Returns:
-            (соответствует_4НФ, список_нарушений)
-        """
         violations = []
 
         # Сначала проверяем НФБК
@@ -180,12 +146,6 @@ class NormalFormAnalyzer:
         return len(violations) == 0, violations
 
     def determine_normal_form(self) -> Tuple[NormalForm, List[str]]:
-        """
-        Определить текущую нормальную форму отношения
-
-        Returns:
-            (нормальная_форма, список_всех_нарушений)
-        """
         all_violations = []
 
         # Проверяем последовательно все нормальные формы
@@ -217,7 +177,6 @@ class NormalFormAnalyzer:
         return NormalForm.FOURTH_NF, all_violations
 
     def get_analysis_report(self) -> str:
-        """Получить подробный отчет об анализе"""
         report = f"Анализ отношения: {self.relation.name}\n"
         report += "=" * 50 + "\n\n"
 

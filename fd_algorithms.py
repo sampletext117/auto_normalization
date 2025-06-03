@@ -138,15 +138,7 @@ class FDAlgorithms:
 
     @staticmethod
     def minimal_cover(fds: List[FunctionalDependency]) -> List[FunctionalDependency]:
-        """
-        Найти минимальное покрытие множества ФЗ
 
-        Args:
-            fds: Список функциональных зависимостей
-
-        Returns:
-            Минимальное покрытие
-        """
         # Шаг 1: Разделить правые части
         split_fds = []
         for fd in fds:
