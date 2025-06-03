@@ -825,6 +825,56 @@ class NormalizationGUI:
         ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
 
 
+    def run_performance_gui(self):
+        """Запустить измерение производительности SELECT-запросов."""
+        if not self.normalization_result:
+            messagebox.showwarning("Ошибка", "Сначала выполните нормализацию.")
+            return
+
+        # Считать, сколько строк генерировать
+        try:
+            num_rows = int(self.test_rows_var.get())
+            if num_rows <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Неверный ввод", "Количество строк должно быть положительным целым числом.")
+            return
+
+        orig_rel = self.normalization_result.original_relation
+
+        # Перехват stdout для логов
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                # Вызываем обновлённый run_performance_test
+                results = run_performance_test(orig_rel, num_rows=num_rows, repeats=1000)
+                # Строим графики
+                plot_performance(results)
+        except Exception as e:
+            buf.write("\n[ERROR] При выполнении теста производительности:\n")
+            print(e)
+            buf.write(str(e))
+
+        log = buf.getvalue()
+
+        # Показать текстовый лог во всплывающем окне
+        popup = tk.Toplevel(self.root)
+        popup.title("Лог теста производительности")
+        popup.geometry("700x500")
+
+        lbl = ttk.Label(popup, text=f"Лог теста производительности (строк: {num_rows}):",
+                        font=("Arial", 10, "bold"))
+        lbl.pack(anchor='nw', padx=5, pady=(5, 0))
+
+        txt = scrolledtext.ScrolledText(popup, wrap=tk.NONE)
+        txt.pack(fill='both', expand=True, padx=5, pady=5)
+        txt.insert("1.0", log)
+        txt.configure(state="disabled")
+
+        ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
+
 
     def save_report(self):
         """Сохранение отчета"""

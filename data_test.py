@@ -144,7 +144,7 @@ def insert_random_data(conn, rel: Relation, num_rows: int):
                 # Иначе повторяем генерацию
 
             # Логируем сам SQL и сгенерированные values
-            print(f"[SQL-INSERT] {insert_sql} → {values}")
+            # print(f"[SQL-INSERT] {insert_sql} → {values}")
             cur.execute(insert_sql, values)
 
     conn.commit()

@@ -116,17 +116,29 @@ def _build_select_queries(
 
 def _time_query(conn: psycopg2.extensions.connection, sql: str, repeats: int = 5) -> float:
     """
-    Запустить запрос `sql` `repeats` раз и вернуть среднее время в секундах.
+    Запустить запрос `sql` `repeats` раз, сбрасывая сеансовый кеш PostgreSQL перед каждым запуском,
+    и вернуть среднее время в секундах.
     """
     total = 0.0
-    with conn.cursor() as cur:
+    # Включаем autocommit, чтобы DISCARD ALL не запускался внутри транзакции
+    previous_autocommit = conn.autocommit
+    conn.autocommit = True
+    try:
         for _ in range(repeats):
-            start = time.perf_counter()
-            cur.execute(sql)
-            # ждем фактического считывания всех строк
-            cur.fetchall()
-            end = time.perf_counter()
-            total += (end - start)
+            with conn.cursor() as cur:
+                # Очищаем сеансовый кеш PostgreSQL
+                cur.execute("DISCARD ALL;")
+
+                # Выполняем запрос сразу же в том же автокоммит-режиме
+                start = time.perf_counter()
+                cur.execute(sql)
+                cur.fetchall()  # гарантируем полное чтение всех строк
+                end = time.perf_counter()
+                total += (end - start)
+    finally:
+        # Восстанавливаем прежнее состояние autocommit
+        conn.autocommit = previous_autocommit
+
     return total / repeats
 
 
@@ -156,43 +168,36 @@ def run_performance_test(
     conn = connect()
     results: Dict[str, Dict[str, float]] = {}
     try:
-        # ----------------- 1) Создаём и заполняем исходную таблицу -----------------
+        # ----------------- 1) Создание и заполнение исходной таблицы -----------------
         drop_table_if_exists(conn, orig_rel.name)
         create_table(conn, orig_rel)
         insert_random_data(conn, orig_rel, num_rows)
 
-        # Подготовим словарь, куда запишем разбиения по уровням
-        decomposed_by_level: Dict[str, List[Relation]] = {}
-
         # ----------------- 2) Декомпозиция для каждого уровня -----------------
-        # 2NF
         res_2nf = Decomposer.decompose_to_2nf(orig_rel)
-        decomposed_by_level["2NF"] = res_2nf.decomposed_relations
+        rels_2nf = res_2nf.decomposed_relations
 
-        # 3NF
         res_3nf = Decomposer.decompose_to_3nf(orig_rel)
-        decomposed_by_level["3NF"] = res_3nf.decomposed_relations
+        rels_3nf = res_3nf.decomposed_relations
 
-        # BCNF
         res_bcnf = Decomposer.decompose_to_bcnf(orig_rel)
-        decomposed_by_level["BCNF"] = res_bcnf.decomposed_relations
+        rels_bcnf = res_bcnf.decomposed_relations
 
-        # 4NF
         res_4nf = Decomposer.decompose_to_4nf(orig_rel)
-        decomposed_by_level["4NF"] = res_4nf.decomposed_relations
+        rels_4nf = res_4nf.decomposed_relations
 
-        # ----------------- 3) Для каждого нормализованного уровня создаём и заполняем таблицы -----------------
-        for level, rels in decomposed_by_level.items():
+        # ----------------- 3) Создание и заполнение таблиц для каждого шага -----------------
+        for level_name, rels in [("2NF", rels_2nf), ("3NF", rels_3nf), ("BCNF", rels_bcnf), ("4NF", rels_4nf)]:
             for r in rels:
                 drop_table_if_exists(conn, r.name)
-                # Создаём таблицу без ограничения PK
+                # Создаём таблицу без первичного ключа
                 cols_sql = [f"{attr.name} {sql_type_for(attr)}" for attr in r.attributes]
                 create_sql = f"CREATE TABLE {r.name} (\n    " + ",\n    ".join(cols_sql) + "\n);"
                 with conn.cursor() as cur:
                     cur.execute(create_sql)
                 conn.commit()
 
-                # Заполняем через distinct из исходной
+                # Заполняем через SELECT DISTINCT из исходной
                 cols_list = ", ".join(attr.name for attr in r.attributes)
                 proj_sql = f"INSERT INTO {r.name} ({cols_list}) SELECT DISTINCT {cols_list} FROM {orig_rel.name};"
                 with conn.cursor() as cur:
@@ -202,20 +207,30 @@ def run_performance_test(
         # ----------------- 4) Собираем запросы для всех уровней -----------------
         all_levels_queries: Dict[str, Dict[str, str]] = {}
 
-        # Original
-        all_levels_queries["Original"] = _build_select_queries(orig_rel, [])
+        # Для Original
+        q_original = _build_select_queries(orig_rel, [])
+        all_levels_queries["Original"] = q_original["Original"]
 
-        # 2NF
-        all_levels_queries["2NF"] = _build_select_queries(orig_rel, decomposed_by_level["2NF"])["2NF"]
+        # Для 2NF
+        q_2nf = _build_select_queries(orig_rel, rels_2nf)
+        # Извлекаем единственный ключ, отличный от "Original"
+        level_key_2nf = next(k for k in q_2nf if k != "Original")
+        all_levels_queries["2NF"] = q_2nf[level_key_2nf]
 
-        # 3NF
-        all_levels_queries["3NF"] = _build_select_queries(orig_rel, decomposed_by_level["3NF"])["3NF"]
+        # Для 3NF
+        q_3nf = _build_select_queries(orig_rel, rels_3nf)
+        level_key_3nf = next(k for k in q_3nf if k != "Original")
+        all_levels_queries["3NF"] = q_3nf[level_key_3nf]
 
-        # BCNF
-        all_levels_queries["BCNF"] = _build_select_queries(orig_rel, decomposed_by_level["BCNF"])["BCNF"]
+        # Для BCNF
+        q_bcnf = _build_select_queries(orig_rel, rels_bcnf)
+        level_key_bcnf = next(k for k in q_bcnf if k != "Original")
+        all_levels_queries["BCNF"] = q_bcnf[level_key_bcnf]
 
-        # 4NF
-        all_levels_queries["4NF"] = _build_select_queries(orig_rel, decomposed_by_level["4NF"])["4NF"]
+        # Для 4NF
+        q_4nf = _build_select_queries(orig_rel, rels_4nf)
+        level_key_4nf = next(k for k in q_4nf if k != "Original")
+        all_levels_queries["4NF"] = q_4nf[level_key_4nf]
 
         # ----------------- 5) Замеряем время выполнения -----------------
         for level_name, qdict in all_levels_queries.items():
