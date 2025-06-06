@@ -6,7 +6,7 @@ import io
 from contextlib import redirect_stdout
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-from typing import List, Set, Optional, Tuple # Added Tuple
+from typing import List, Set, Optional, Tuple, Dict # Added Tuple
 import json
 
 # Импорт модулей программы
@@ -20,6 +20,7 @@ from decomposition import Decomposer
 from visualization import VisualizationWindow, add_visualization_to_gui # MODIFIED: Added add_visualization_to_gui
 from data_test import test_decomposition, DB_PARAMS
 from performance_test import run_performance_test, plot_performance
+from memory_test import run_memory_test, plot_memory_usage
 
 
 
@@ -146,6 +147,80 @@ class NormalizationGUI:
         # Создание интерфейса
         self.create_menu()
         self.create_widgets()
+
+    def make_text_readonly_but_copyable(self, text_widget):
+        """
+        Делает текстовый виджет доступным только для чтения, но с возможностью копирования
+        """
+
+        # Биндим события для предотвращения редактирования
+        def prevent_edit(event):
+            if event.keysym not in ['Up', 'Down', 'Left', 'Right', 'Home', 'End',
+                                    'Prior', 'Next', 'Control_L', 'Control_R',
+                                    'c', 'C', 'a', 'A']:
+                if not (event.state & 0x4):  # Не Ctrl
+                    return "break"
+
+        text_widget.bind("<Key>", prevent_edit)
+        text_widget.bind("<Button-2>", lambda e: "break")  # Запрет вставки средней кнопкой мыши
+
+        # Разрешаем выделение и копирование
+        text_widget.bind("<Control-c>", lambda e: None)
+        text_widget.bind("<Control-a>", lambda e: text_widget.tag_add("sel", "1.0", "end"))
+
+        # Устанавливаем курсор для индикации что текст можно выделять
+        text_widget.config(cursor="arrow")
+
+    def show_copyable_result_window(self, title: str, content: str, width: int = 800, height: int = 600):
+        """
+        Создает окно с результатами, из которого можно копировать текст
+        """
+        result_window = tk.Toplevel(self.root)
+        result_window.title(title)
+        result_window.geometry(f"{width}x{height}")
+
+        # Фрейм для текста
+        text_frame = ttk.Frame(result_window)
+        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # Создаем ScrolledText
+        text_widget = scrolledtext.ScrolledText(
+            text_frame,
+            wrap=tk.WORD,
+            font=("Courier", 9)
+        )
+        text_widget.pack(fill='both', expand=True)
+
+        # Вставляем контент
+        text_widget.insert('1.0', content)
+
+        # Делаем текст доступным только для чтения, но копируемым
+        self.make_text_readonly_but_copyable(text_widget)
+
+        # Фрейм для кнопок
+        button_frame = ttk.Frame(result_window)
+        button_frame.pack(fill='x', padx=5, pady=5)
+
+        # Кнопка копирования всего текста
+        def copy_all():
+            text_widget.tag_add("sel", "1.0", "end")
+            text_widget.event_generate("<<Copy>>")
+            # Показываем уведомление
+            copy_label = ttk.Label(button_frame, text="Скопировано в буфер обмена!",
+                                   foreground="green")
+            copy_label.pack(side='left', padx=10)
+            result_window.after(2000, copy_label.destroy)
+
+        ttk.Button(button_frame, text="Копировать всё", command=copy_all).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Закрыть", command=result_window.destroy).pack(side='right', padx=5)
+
+        # Информационная надпись
+        info_label = ttk.Label(button_frame, text="Используйте Ctrl+C для копирования выделенного текста",
+                               foreground="gray")
+        info_label.pack(side='left', padx=20)
+
+        return result_window, text_widget
+
 
     def create_menu(self):
         """Создание меню"""
@@ -328,7 +403,8 @@ class NormalizationGUI:
 
         ttk.Button(export_frame, text="Тест производительности", command=self.run_performance_gui).pack(side='left',
                                                                                                         padx=5)
-
+        ttk.Button(export_frame, text="Тест использования памяти", command=self.run_memory_test_gui).pack(side='left',
+                                                                                                          padx=5)
         # ========== Блок ввода кредов для БД ==========
         creds_frame = ttk.LabelFrame(self.results_frame, text="Параметры подключения к БД", padding=10)
         creds_frame.pack(fill='x', padx=5, pady=(5, 0))
@@ -874,6 +950,260 @@ class NormalizationGUI:
         txt.configure(state="disabled")
 
         ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
+
+    def run_memory_test_gui(self):
+        """Запустить тест использования памяти"""
+        if not self.normalization_result:
+            messagebox.showwarning("Ошибка", "Сначала выполните нормализацию.")
+            return
+
+        # Считываем количество строк
+        try:
+            num_rows = int(self.test_rows_var.get())
+            if num_rows <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("Неверный ввод", "Количество строк должно быть положительным целым числом.")
+            return
+
+        # Проверяем параметры подключения к БД
+        if not all([self.db_host_var.get(), self.db_port_var.get(),
+                    self.db_name_var.get(), self.db_user_var.get()]):
+            # Используем дефолтные параметры
+            self.db_host_var.set(self.default_db_params['host'])
+            self.db_port_var.set(self.default_db_params['port'])
+            self.db_name_var.set(self.default_db_params['dbname'])
+            self.db_user_var.set(self.default_db_params['user'])
+            self.db_password_var.set(self.default_db_params['password'])
+
+        # Обновляем параметры подключения
+        import data_test
+        data_test.DB_PARAMS = {
+            'host': self.db_host_var.get(),
+            'port': self.db_port_var.get(),
+            'dbname': self.db_name_var.get(),
+            'user': self.db_user_var.get(),
+            'password': self.db_password_var.get()
+        }
+
+        # Также обновляем для memory_test
+        import memory_test
+        memory_test.connect = data_test.connect
+
+        orig_rel = self.normalization_result.original_relation
+
+        # Создаем прогресс-диалог
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Выполнение теста памяти")
+        progress_window.geometry("400x150")
+        progress_window.transient(self.root)
+        progress_window.grab_set()
+
+        ttk.Label(progress_window, text="Выполняется тест использования памяти...",
+                  font=("Arial", 10)).pack(pady=20)
+        progress_bar = ttk.Progressbar(progress_window, mode='indeterminate', length=300)
+        progress_bar.pack(pady=10)
+        progress_bar.start(10)
+
+        status_label = ttk.Label(progress_window, text="Подготовка...")
+        status_label.pack(pady=5)
+
+        # Запускаем тест в отдельном потоке
+        import threading
+        results = {}
+        error = None
+
+        def run_test():
+            nonlocal results, error
+            try:
+                import io
+                from contextlib import redirect_stdout
+
+                # Перехватываем вывод для отображения в статусе
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    results = run_memory_test(orig_rel, num_rows)
+
+                # Обновляем статус периодически
+                log_lines = buf.getvalue().split('\n')
+                for line in log_lines:
+                    if line.strip():
+                        progress_window.after(0, lambda l=line: status_label.config(text=l[:50] + "..."))
+
+            except Exception as e:
+                error = str(e)
+                import traceback
+                traceback.print_exc()
+
+        # Запускаем тест
+        test_thread = threading.Thread(target=run_test)
+        test_thread.start()
+
+        # Ждем завершения
+        def check_completion():
+            if test_thread.is_alive():
+                progress_window.after(100, check_completion)
+            else:
+                progress_bar.stop()
+                progress_window.destroy()
+
+                if error:
+                    messagebox.showerror("Ошибка", f"Ошибка при выполнении теста памяти:\n{error}")
+                elif results:
+                    # Показываем результаты
+                    self.show_memory_test_results(results)
+                    # Строим графики
+                    try:
+                        plot_memory_usage(results)
+                    except Exception as e:
+                        print(f"Ошибка при построении графиков: {e}")
+                else:
+                    messagebox.showwarning("Ошибка", "Не удалось получить результаты теста")
+
+        progress_window.after(100, check_completion)
+
+    def show_memory_test_results(self, results: Dict[str, Dict[str, Dict[str, any]]]):
+        """Показать результаты теста памяти с реальными метриками избыточности"""
+        result_window = tk.Toplevel(self.root)
+        result_window.title("Результаты теста памяти")
+        result_window.geometry("900x700")
+
+        # Создаем текстовое поле с прокруткой
+        text_frame = ttk.Frame(result_window)
+        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        text_widget = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, font=("Courier", 9))
+        text_widget.pack(fill='both', expand=True)
+
+        # Формируем отчет
+        report = "РЕЗУЛЬТАТЫ ТЕСТА ИСПОЛЬЗОВАНИЯ ПАМЯТИ\n"
+        report += "=" * 80 + "\n\n"
+
+        # Сводная таблица
+        report += "Сводная таблица размеров и эффективности:\n"
+        report += "-" * 80 + "\n"
+        report += f"{'Уровень':<10} | {'Без индексов':>12} | {'С индексами':>12} | {'Индексы':>10} | "
+        report += f"{'Избыточность':>12} | {'Устранено':>10}\n"
+        report += "-" * 80 + "\n"
+
+        original_size = results.get("Original", {}).get("with_indexes", {}).get("total_size", 1)
+        original_redundancy = results.get("Original", {}).get("redundancy_metrics", {}).get("redundancy_ratio", 0) * 100
+
+        for level in ["Original", "2NF", "3NF", "BCNF", "4NF"]:
+            if level in results:
+                size_no_idx = results[level]["without_indexes"]["total_size"] / 1024
+                size_with_idx = results[level]["with_indexes"]["total_size"] / 1024
+                idx_size = results[level]["with_indexes"]["indexes_size"] / 1024
+
+                if level == "Original":
+                    redundancy = original_redundancy
+                    eliminated = 0
+                else:
+                    eff_metrics = results[level].get("efficiency_metrics", {})
+                    redundancy = eff_metrics.get("normalized_redundancy", 0)
+                    eliminated = eff_metrics.get("redundancy_elimination", 0)
+
+                report += f"{level:<10} | {size_no_idx:>12.2f} | {size_with_idx:>12.2f} | "
+                report += f"{idx_size:>10.2f} | {redundancy:>12.1f}% | {eliminated:>10.1f}%\n"
+
+        report += "-" * 80 + "\n\n"
+
+        # Детальная информация
+        report += "Детальная информация по уровням:\n"
+        report += "=" * 80 + "\n\n"
+
+        for level, level_data in results.items():
+            report += f"{level}:\n"
+            report += "-" * 40 + "\n"
+
+            without_idx = level_data["without_indexes"]
+            with_idx = level_data["with_indexes"]
+
+            report += f"  Статистика размеров:\n"
+            report += f"    - Размер таблиц: {without_idx['table_size'] / 1024:.2f} КБ\n"
+            report += f"    - Размер индексов: {with_idx['indexes_size'] / 1024:.2f} КБ\n"
+            report += f"    - Общий размер: {with_idx['total_size'] / 1024:.2f} КБ\n"
+            report += f"    - Количество строк: {without_idx['row_count']}\n"
+
+            if without_idx['row_count'] > 0:
+                avg_row_size = with_idx['table_size'] / without_idx['row_count']
+                report += f"    - Средний размер строки: {avg_row_size:.2f} байт\n"
+
+            # Метрики избыточности
+            if level == "Original":
+                redundancy_metrics = level_data.get("redundancy_metrics", {})
+                if redundancy_metrics:
+                    report += f"\n  Анализ избыточности:\n"
+                    report += f"    - Общая избыточность: {redundancy_metrics['redundancy_ratio'] * 100:.1f}%\n"
+                    report += f"    - Дубликаты полных строк: {redundancy_metrics.get('duplicate_rows', 0)}\n"
+                    report += f"    - Уникальных строк: {redundancy_metrics.get('unique_rows', 0)}\n"
+
+                    # Избыточность по атрибутам
+                    attr_redundancy = redundancy_metrics.get('attribute_redundancy', {})
+                    if attr_redundancy:
+                        report += f"    - Избыточность по атрибутам:\n"
+                        for attr_name, redundancy in sorted(attr_redundancy.items()):
+                            report += f"        {attr_name}: {redundancy * 100:.1f}%\n"
+            else:
+                # Для нормализованных уровней
+                eff_metrics = level_data.get("efficiency_metrics", {})
+                if eff_metrics:
+                    report += f"\n  Эффективность нормализации:\n"
+                    report += f"    - Исходная избыточность: {eff_metrics.get('original_redundancy', 0):.1f}%\n"
+                    report += f"    - Текущая избыточность: {eff_metrics.get('normalized_redundancy', 0):.1f}%\n"
+                    report += f"    - Устранено избыточности: {eff_metrics.get('redundancy_elimination', 0):.1f}%\n"
+                    report += f"    - Эффективность пространства: {eff_metrics.get('space_efficiency', 0):.1f}%\n"
+                    report += f"    - Дублирование ключей: {eff_metrics.get('key_overhead', 0)} раз\n"
+                    report += f"    - Множитель строк: {eff_metrics.get('row_multiplication_factor', 1):.2f}x\n"
+
+            report += "\n"
+
+        # Выводы и рекомендации
+        report += "ВЫВОДЫ И РЕКОМЕНДАЦИИ:\n"
+        report += "=" * 80 + "\n"
+
+        # Анализ эффективности
+        best_space_efficiency = 0
+        best_level = "Original"
+        min_size = float('inf')
+        size_optimal_level = "Original"
+
+        for level in ["2NF", "3NF", "BCNF", "4NF"]:
+            if level in results:
+                eff = results[level].get("efficiency_metrics", {}).get("space_efficiency", 0)
+                if eff > best_space_efficiency:
+                    best_space_efficiency = eff
+                    best_level = level
+
+                size = results[level]["with_indexes"]["total_size"]
+                if size < min_size:
+                    min_size = size
+                    size_optimal_level = level
+
+        report += f"- Наиболее эффективный уровень по устранению избыточности: {best_level} "
+        report += f"({best_space_efficiency:.1f}% эффективности)\n"
+        report += f"- Наименьший размер хранения: {size_optimal_level} "
+        report += f"({min_size / 1024:.2f} КБ)\n"
+
+        # Рекомендации
+        if best_space_efficiency > 70:
+            report += "\nРекомендация: Высокая эффективность устранения избыточности достигнута. "
+            report += f"Рекомендуется использовать {best_level} для оптимального баланса между "
+            report += "нормализацией и производительностью.\n"
+        elif best_space_efficiency > 40:
+            report += "\nРекомендация: Умеренная эффективность устранения избыточности. "
+            report += "Рассмотрите возможность частичной денормализации для улучшения производительности "
+            report += "критичных запросов.\n"
+        else:
+            report += "\nРекомендация: Низкая эффективность устранения избыточности. "
+            report += "Возможно, исходная схема уже оптимальна или требуется пересмотр структуры данных.\n"
+
+        # Вставляем отчет в текстовое поле
+        text_widget.insert('1.0', report)
+        text_widget.configure(state='disabled')
+
+        # Кнопка закрытия
+        ttk.Button(result_window, text="Закрыть", command=result_window.destroy).pack(pady=5)
 
 
     def save_report(self):

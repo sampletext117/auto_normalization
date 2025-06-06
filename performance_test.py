@@ -1,282 +1,652 @@
 # файл: performance_test.py
-
+import numpy as np
 import psycopg2
 import time
 from typing import List, Dict, Tuple, Optional
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
-from models import Relation, Attribute
+from models import Relation, Attribute, NormalForm
 from data_test import *
 from decomposition import Decomposer
+from analyzer import NormalFormAnalyzer
 
 
-def _build_select_queries(
-    orig_rel: Relation,
-    normalized: List[Relation]
-) -> Dict[str, Dict[str, str]]:
+# Добавьте эти функции в performance_test.py
+
+def generate_test_value_for_type(data_type: str) -> str:
     """
-    Построить для каждого уровня нормализации (ключ словаря) набор SQL SELECT-запросов.
-    Ключи внутри: "all", "pk", "non_pk", "join_norm" (для нормализованных).
-    Возвращает:
-    {
-      "original": {
-          "all":    "SELECT a,b,c,... FROM Orig;",
-          "pk":     "SELECT <PK_COLUMNS> FROM Orig;",
-          "non_pk": "SELECT <NON_PK_COLUMNS> FROM Orig;"
-      },
-      "2NF":  { ... },
-      "3NF":  { ... },
-      "BCNF": { ... },
-      "4NF":  { ... }
-    }
+    Генерирует подходящее тестовое значение для SQL-запроса в зависимости от типа данных
+
+    Args:
+        data_type: тип данных атрибута (VARCHAR, INTEGER, DATE, DECIMAL, BOOLEAN)
+
+    Returns:
+        Строка с SQL-представлением значения
     """
-    queries: Dict[str, Dict[str, str]] = {}
+    data_type_upper = data_type.upper()
 
-    # ---- Исходная схема ----
-    orig_name = orig_rel.name
-    all_cols  = ", ".join(attr.name for attr in orig_rel.attributes)
-    pk_cols   = ", ".join(attr.name for attr in orig_rel.attributes if attr.is_primary_key)
-    non_pk_cols = ", ".join(attr.name for attr in orig_rel.attributes if not attr.is_primary_key)
+    if data_type_upper.startswith('VARCHAR') or data_type_upper == 'TEXT':
+        # Для строковых типов возвращаем строку в кавычках
+        return "'test%'"
+    elif data_type_upper == 'INTEGER':
+        return "1"
+    elif data_type_upper == 'DECIMAL' or data_type_upper == 'NUMERIC':
+        return "100.50"
+    elif data_type_upper == 'DATE':
+        return "'2020-01-01'"
+    elif data_type_upper == 'BOOLEAN':
+        return "TRUE"
+    else:
+        # По умолчанию предполагаем строковый тип
+        return "'test'"
 
-    queries["Original"] = {
-        "all":    f"SELECT {all_cols} FROM {orig_name};",
-        "pk":     f"SELECT {pk_cols} FROM {orig_name};"   if pk_cols   else "",
-        "non_pk": f"SELECT {non_pk_cols} FROM {orig_name};" if non_pk_cols else ""
-    }
 
-    # ---- Перебираем нормализованные отношения ----
-    # Определяем уровень для каждого нормализованного Relation по имени:
-    # предположим, что именем содержит _2nf, _3nf, _bcnf, _4nf (в зависимости от метода).
-    # Если не нашли, складываем в «Unknown».
-    def classify_level(rels: List[Relation]) -> str:
-        for r in rels:
-            name = r.name.lower()
-            if "_2nf" in name:
-                return "2NF"
-            if "_3nf" in name:
-                return "3NF"
-            if "_bcnf" in name:
-                return "BCNF"
-            if "_4nf" in name:
-                return "4NF"
-        return "Unknown"
+def generate_range_condition(attr: Attribute) -> str:
+    """
+    Генерирует условие диапазона для атрибута в зависимости от его типа
 
-    level = classify_level(normalized)
-    if level == "Unknown":
-        # По умолчанию, если везде сходится 3NF‐декомпозиция
-        level = "3NF"
+    Args:
+        attr: атрибут для которого генерируется условие
 
-    # Собираем все атрибуты по-уровневые
-    # Для каждого нормализованного relation на этом уровне делаем:
-    # - "all"   = SELECT <all_attrs>   FROM R1 JOIN R2 JOIN ... (склейка обратно)
-    # - "pk"    = SELECT <PK всех rel>  FROM R1 JOIN R2 JOIN ...
-    # - "non_pk"= SELECT <nonPK всех rel> FROM R1 JOIN R2 JOIN ...
-    #
-    # Сначала определения JOIN-клаузы:
-    join_clause = ""
-    aliases = []
-    for i, r in enumerate(normalized):
-        alias = f"T{i}"
-        aliases.append( (alias, r) )
-        if i == 0:
-            join_clause = f"{r.name} AS {alias}"
+    Returns:
+        SQL условие для WHERE клаузы
+    """
+    data_type_upper = attr.data_type.upper()
+
+    if data_type_upper == 'INTEGER':
+        return f"{attr.name} BETWEEN 1 AND 100"
+    elif data_type_upper == 'DECIMAL' or data_type_upper == 'NUMERIC':
+        return f"{attr.name} BETWEEN 0.0 AND 1000.0"
+    elif data_type_upper == 'DATE':
+        return f"{attr.name} BETWEEN '2020-01-01' AND '2020-12-31'"
+    elif data_type_upper.startswith('VARCHAR'):
+        # Для строк используем сравнение по алфавиту
+        return f"{attr.name} BETWEEN 'A' AND 'M'"
+    else:
+        # Для других типов используем простое равенство
+        return f"{attr.name} = {generate_test_value_for_type(attr.data_type)}"
+
+
+def generate_filter_condition(attr: Attribute) -> str:
+    """
+    Генерирует условие фильтрации для атрибута
+
+    Args:
+        attr: атрибут для фильтрации
+
+    Returns:
+        SQL условие для WHERE клаузы
+    """
+    data_type_upper = attr.data_type.upper()
+
+    if data_type_upper.startswith('VARCHAR') or data_type_upper == 'TEXT':
+        # Для строк используем LIKE
+        return f"{attr.name} LIKE 'test%'"
+    elif data_type_upper == 'BOOLEAN':
+        return f"{attr.name} = TRUE"
+    else:
+        # Для остальных типов используем точное сравнение
+        test_value = generate_test_value_for_type(attr.data_type)
+        return f"{attr.name} = {test_value}"
+
+
+def _build_realistic_select_queries(orig_rel: Relation, normalized: List[Relation]) -> Dict[str, Dict[str, str]]:
+    """
+    Построить реалистичные запросы для тестирования производительности с учетом типов данных
+    """
+    queries = {}
+
+    # Определяем атрибуты для запросов
+    pk_attrs = [attr for attr in orig_rel.attributes if attr.is_primary_key]
+    non_pk_attrs = [attr for attr in orig_rel.attributes if not attr.is_primary_key]
+
+    # Выбираем первый PK и non-PK атрибут для тестов
+    pk_attr = pk_attrs[0] if pk_attrs else None
+    non_pk_attr = non_pk_attrs[0] if non_pk_attrs else None
+
+    # Запросы для исходной таблицы
+    queries["Original"] = {}
+
+    # 1. Точечный поиск по первичному ключу
+    if pk_attr:
+        pk_value = generate_test_value_for_type(pk_attr.data_type)
+        queries["Original"]["pk_point_lookup"] = (
+            f"SELECT * FROM {orig_rel.name} WHERE {pk_attr.name} = {pk_value}"
+        )
+
+    # 2. Диапазонный поиск по первичному ключу
+    if pk_attr:
+        range_condition = generate_range_condition(pk_attr)
+        queries["Original"]["pk_range_scan"] = (
+            f"SELECT * FROM {orig_rel.name} WHERE {range_condition}"
+        )
+
+    # 3. Полное сканирование с фильтрацией по non-PK атрибуту
+    if non_pk_attr:
+        filter_condition = generate_filter_condition(non_pk_attr)
+        queries["Original"]["non_pk_filter"] = (
+            f"SELECT * FROM {orig_rel.name} WHERE {filter_condition}"
+        )
+
+    # 4. Агрегирующий запрос
+    if pk_attr and non_pk_attr:
+        # Для агрегации выбираем подходящий числовой атрибут если есть
+        numeric_attr = next((attr for attr in non_pk_attrs
+                             if attr.data_type.upper() in ['INTEGER', 'DECIMAL', 'NUMERIC']),
+                            non_pk_attr)
+
+        if numeric_attr.data_type.upper() in ['INTEGER', 'DECIMAL', 'NUMERIC']:
+            # Если есть числовой атрибут, используем SUM
+            queries["Original"]["aggregation"] = (
+                f"SELECT {pk_attr.name}, SUM({numeric_attr.name}) as total "
+                f"FROM {orig_rel.name} "
+                f"GROUP BY {pk_attr.name}"
+            )
         else:
-            # ищем первое общее поле между текущей таблицей и предыдущими
-            prev_attrs = set().union(*(set(x.attributes) for _, x in aliases[:-1]))
-            cur_attrs  = set(r.attributes)
-            common = prev_attrs.intersection(cur_attrs)
-            if common:
-                # возьмём одно общее по имени
-                col = next(iter(common)).name
-                join_clause = f"{join_clause} JOIN {r.name} AS {alias} ON {alias}.{col} = {aliases[0][0]}.{col}"
-            else:
-                # если нет пересечений, делаем CROSS JOIN
-                join_clause = f"{join_clause} CROSS JOIN {r.name} AS {alias}"
+            # Иначе используем COUNT
+            queries["Original"]["aggregation"] = (
+                f"SELECT {non_pk_attr.name}, COUNT(*) as cnt "
+                f"FROM {orig_rel.name} "
+                f"GROUP BY {non_pk_attr.name}"
+            )
 
-    # Все столбцы «all» для normalized
-    all_cols_norm = []
-    pk_cols_norm  = []
-    non_pk_cols_norm = []
-    for alias, r in aliases:
-        for attr in r.attributes:
-            all_cols_norm.append(f"{alias}.{attr.name}")
-            if attr.is_primary_key:
-                pk_cols_norm.append(f"{alias}.{attr.name}")
-            else:
-                non_pk_cols_norm.append(f"{alias}.{attr.name}")
+    # 5. Сортировка с лимитом (пагинация)
+    if pk_attr:
+        queries["Original"]["ordered_limit"] = (
+            f"SELECT * FROM {orig_rel.name} "
+            f"ORDER BY {pk_attr.name} "
+            f"LIMIT 50 OFFSET 100"
+        )
 
-    queries[level] = {
-        "all":    f"SELECT {', '.join(all_cols_norm)} FROM {join_clause};",
-        "pk":     f"SELECT {', '.join(pk_cols_norm)} FROM {join_clause};"    if pk_cols_norm    else "",
-        "non_pk": f"SELECT {', '.join(non_pk_cols_norm)} FROM {join_clause};" if non_pk_cols_norm else ""
-    }
+    # Для нормализованных таблиц
+    if normalized:
+        level = classify_normalization_level(normalized)
+        queries[level] = {}
+
+        # Строим оптимальный JOIN
+        join_clause = build_optimal_join(normalized)
+
+        # Определяем главную таблицу (содержащую первичный ключ)
+        main_table = None
+        for rel in normalized:
+            if pk_attr and any(attr.name == pk_attr.name for attr in rel.attributes):
+                main_table = rel
+                break
+
+        if not main_table:
+            main_table = normalized[0]
+
+        # 1. Точечный поиск с JOIN
+        if pk_attr:
+            pk_value = generate_test_value_for_type(pk_attr.data_type)
+            queries[level]["pk_point_lookup"] = (
+                f"SELECT * FROM {join_clause} "
+                f"WHERE {main_table.name}.{pk_attr.name} = {pk_value}"
+            )
+
+        # 2. Диапазонный поиск с JOIN
+        if pk_attr:
+            range_condition = generate_range_condition(pk_attr)
+            # Добавляем префикс таблицы к имени атрибута
+            prefixed_range = range_condition.replace(pk_attr.name, f"{main_table.name}.{pk_attr.name}")
+            queries[level]["pk_range_scan"] = (
+                f"SELECT * FROM {join_clause} "
+                f"WHERE {prefixed_range}"
+            )
+
+        # 3. Фильтрация по non-PK с JOIN
+        if non_pk_attr:
+            # Находим таблицу с non-PK атрибутом
+            non_pk_table = None
+            for rel in normalized:
+                if any(attr.name == non_pk_attr.name for attr in rel.attributes):
+                    non_pk_table = rel
+                    break
+
+            if non_pk_table:
+                filter_condition = generate_filter_condition(non_pk_attr)
+                # Добавляем префикс таблицы
+                prefixed_filter = filter_condition.replace(non_pk_attr.name,
+                                                           f"{non_pk_table.name}.{non_pk_attr.name}")
+                queries[level]["non_pk_filter"] = (
+                    f"SELECT * FROM {join_clause} "
+                    f"WHERE {prefixed_filter}"
+                )
+
+        # 4. Агрегация с JOIN
+        if pk_attr and non_pk_attr:
+            # Ищем числовой атрибут для агрегации
+            numeric_attr = None
+            numeric_table = None
+
+            for rel in normalized:
+                for attr in rel.attributes:
+                    if (not attr.is_primary_key and
+                            attr.data_type.upper() in ['INTEGER', 'DECIMAL', 'NUMERIC']):
+                        numeric_attr = attr
+                        numeric_table = rel
+                        break
+                if numeric_attr:
+                    break
+
+            if numeric_attr and numeric_table:
+                queries[level]["aggregation"] = (
+                    f"SELECT {main_table.name}.{pk_attr.name}, "
+                    f"SUM({numeric_table.name}.{numeric_attr.name}) as total "
+                    f"FROM {join_clause} "
+                    f"GROUP BY {main_table.name}.{pk_attr.name}"
+                )
+            elif non_pk_table:
+                queries[level]["aggregation"] = (
+                    f"SELECT {non_pk_table.name}.{non_pk_attr.name}, COUNT(*) as cnt "
+                    f"FROM {join_clause} "
+                    f"GROUP BY {non_pk_table.name}.{non_pk_attr.name}"
+                )
+
+        # 5. Сортировка с JOIN
+        if pk_attr:
+            queries[level]["ordered_limit"] = (
+                f"SELECT * FROM {join_clause} "
+                f"ORDER BY {main_table.name}.{pk_attr.name} "
+                f"LIMIT 50 OFFSET 100"
+            )
 
     return queries
 
 
+def create_query_indexes(conn, relation: Relation):
+    """
+    Создать индексы, оптимизированные для тестовых запросов с учетом типов данных
+    """
+    with conn.cursor() as cur:
+        # Индексы для различных типов атрибутов
+        for attr in relation.attributes:
+            if attr.is_primary_key:
+                continue  # Для PK индексы создаются автоматически
+
+            data_type_upper = attr.data_type.upper()
+
+            if data_type_upper.startswith('VARCHAR') or data_type_upper == 'TEXT':
+                # Индекс для LIKE запросов по текстовым полям
+                index_name = f"idx_{relation.name}_{attr.name}_pattern"
+                try:
+                    cur.execute(
+                        f"CREATE INDEX IF NOT EXISTS {index_name} "
+                        f"ON {relation.name} ({attr.name} varchar_pattern_ops)"
+                    )
+                    print(f"[INFO] Создан индекс для LIKE запросов: {index_name}")
+                except Exception as e:
+                    print(f"[WARNING] Не удалось создать индекс {index_name}: {e}")
+
+            elif data_type_upper in ['INTEGER', 'DECIMAL', 'NUMERIC', 'DATE']:
+                # B-tree индекс для числовых и временных типов (для диапазонных запросов)
+                index_name = f"idx_{relation.name}_{attr.name}_btree"
+                try:
+                    cur.execute(
+                        f"CREATE INDEX IF NOT EXISTS {index_name} "
+                        f"ON {relation.name} ({attr.name})"
+                    )
+                    print(f"[INFO] Создан B-tree индекс: {index_name}")
+                except Exception as e:
+                    print(f"[WARNING] Не удалось создать индекс {index_name}: {e}")
+
+            elif data_type_upper == 'BOOLEAN':
+                # Для булевых полей индекс имеет смысл только при неравномерном распределении
+                # Проверяем селективность
+                try:
+                    cur.execute(
+                        f"SELECT COUNT(*) FILTER (WHERE {attr.name} = TRUE) as true_count, "
+                        f"COUNT(*) FILTER (WHERE {attr.name} = FALSE) as false_count "
+                        f"FROM {relation.name}"
+                    )
+                    true_count, false_count = cur.fetchone()
+                    total = true_count + false_count
+
+                    # Создаем индекс только если распределение сильно неравномерное
+                    if total > 0:
+                        true_ratio = true_count / total
+                        if true_ratio < 0.1 or true_ratio > 0.9:
+                            index_name = f"idx_{relation.name}_{attr.name}_bool"
+                            cur.execute(
+                                f"CREATE INDEX IF NOT EXISTS {index_name} "
+                                f"ON {relation.name} ({attr.name})"
+                            )
+                            print(f"[INFO] Создан индекс для boolean поля: {index_name}")
+                except Exception as e:
+                    print(f"[WARNING] Ошибка при анализе boolean поля {attr.name}: {e}")
+
+        # Составные индексы для часто используемых комбинаций
+        pk_attrs = [attr for attr in relation.attributes if attr.is_primary_key]
+        if len(pk_attrs) > 1:
+            pk_cols = ", ".join([a.name for a in pk_attrs])
+            index_name = f"idx_{relation.name}_pk_composite"
+            try:
+                cur.execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} "
+                    f"ON {relation.name} ({pk_cols})"
+                )
+                print(f"[INFO] Создан составной индекс: {index_name}")
+            except Exception as e:
+                print(f"[WARNING] Ошибка создания составного индекса: {e}")
+
+        conn.commit()
+
+
+def build_optimal_join(relations: List[Relation]) -> str:
+    """
+    Построить оптимальный JOIN с учетом общих атрибутов
+    """
+    if len(relations) == 1:
+        return relations[0].name
+
+    # Анализируем граф соединений
+    join_graph = {}
+    for i, rel1 in enumerate(relations):
+        join_graph[rel1.name] = []
+        for j, rel2 in enumerate(relations):
+            if i != j:
+                common = set(a.name for a in rel1.attributes) & set(a.name for a in rel2.attributes)
+                if common:
+                    join_graph[rel1.name].append((rel2.name, list(common)[0]))
+
+    # Строим JOIN начиная с таблицы с наибольшим количеством связей
+    start_table = max(join_graph.keys(), key=lambda k: len(join_graph[k]))
+
+    joined = {start_table}
+    join_clause = start_table
+
+    while len(joined) < len(relations):
+        for rel_name in join_graph:
+            if rel_name not in joined:
+                # Ищем, с какой из уже присоединенных таблиц можно соединить
+                for joined_rel in joined:
+                    for target, attr in join_graph[joined_rel]:
+                        if target == rel_name:
+                            join_clause += f" JOIN {rel_name} ON {joined_rel}.{attr} = {rel_name}.{attr}"
+                            joined.add(rel_name)
+                            break
+                    if rel_name in joined:
+                        break
+
+    return join_clause
+
+
+def classify_normalization_level(relations: List[Relation]) -> str:
+    """Определить уровень нормализации по именам таблиц"""
+    for rel in relations:
+        name_lower = rel.name.lower()
+        if '4nf' in name_lower:
+            return "4NF"
+        elif 'bcnf' in name_lower:
+            return "BCNF"
+        elif '3nf' in name_lower:
+            return "3NF"
+        elif any(x in name_lower for x in ['2nf', 'partial', 'main']):
+            return "2NF"
+    return "Unknown"
+
+
 def _time_query(conn: psycopg2.extensions.connection, sql: str, repeats: int = 5) -> float:
     """
-    Запустить запрос `sql` `repeats` раз, сбрасывая сеансовый кеш PostgreSQL перед каждым запуском,
-    и вернуть среднее время в секундах.
+    Запустить запрос и измерить время выполнения с улучшенной диагностикой
     """
-    total = 0.0
-    # Включаем autocommit, чтобы DISCARD ALL не запускался внутри транзакции
-    previous_autocommit = conn.autocommit
-    conn.autocommit = True
+    if not sql or sql.strip() == "":
+        print(f"[WARNING] Пустой SQL запрос")
+        return float("nan")
+
+    total_time = 0.0
+    successful_runs = 0
+
+    # Сохраняем текущий уровень изоляции
+    old_isolation_level = conn.isolation_level
+
     try:
-        for _ in range(repeats):
-            with conn.cursor() as cur:
-                # Очищаем сеансовый кеш PostgreSQL
-                cur.execute("DISCARD ALL;")
+        # Устанавливаем режим autocommit
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
 
-                # Выполняем запрос сразу же в том же автокоммит-режиме
-                start = time.perf_counter()
-                cur.execute(sql)
-                cur.fetchall()  # гарантируем полное чтение всех строк
-                end = time.perf_counter()
-                total += (end - start)
+        for run in range(repeats):
+            try:
+                with conn.cursor() as cur:
+                    # Очищаем кеш
+                    cur.execute("DISCARD ALL;")
+
+                    # Замеряем время выполнения
+                    start = time.perf_counter()
+                    cur.execute(sql)
+                    rows = cur.fetchall()
+                    end = time.perf_counter()
+
+                    elapsed = end - start
+                    total_time += elapsed
+                    successful_runs += 1
+
+                    # Диагностика первого запуска
+                    if run == 0:
+                        print(f"    [DEBUG] Запрос выполнен за {elapsed:.4f} сек, получено {len(rows)} строк")
+
+            except Exception as e:
+                print(f"    [ERROR] Ошибка выполнения запроса (попытка {run + 1}): {e}")
+                print(f"    [ERROR] SQL: {sql[:100]}...")
+
+    except Exception as e:
+        print(f"    [CRITICAL] Ошибка настройки соединения: {e}")
     finally:
-        # Восстанавливаем прежнее состояние autocommit
-        conn.autocommit = previous_autocommit
+        # Восстанавливаем уровень изоляции
+        try:
+            conn.set_isolation_level(old_isolation_level)
+        except:
+            pass
 
-    return total / repeats
+    if successful_runs == 0:
+        print(f"    [ERROR] Ни одна попытка выполнения запроса не удалась")
+        return float("nan")
 
+    avg_time = total_time / successful_runs
+    print(f"    [INFO] Среднее время: {avg_time:.4f} сек ({successful_runs} успешных запусков)")
+    return avg_time
 
-# В файле performance_test.py замените функцию run_performance_test на следующую версию:
 
 def run_performance_test(
-    orig_rel: Relation,
-    num_rows: int = 1000,
-    repeats: int = 5
+        orig_rel: Relation,
+        num_rows: int = 1000,
+        repeats: int = 5
 ) -> Dict[str, Dict[str, float]]:
     """
-    1) Создаёт таблицы: Orig и для каждого уровня нормализации (2NF, 3NF, BCNF, 4NF).
-    2) Заполняет Orig случайными данными.
-    3) Для каждого уровня вызывает Decomposer.decompose_to_X(), создаёт соответствующие таблицы
-       и заполняет их через INSERT SELECT DISTINCT.
-    4) Замеряет время выполнения трёх видов SELECT-запросов: all, pk, non_pk
-       по исходной и по каждой нормализованной схеме.
-    Возвращает словарь:
-      {
-        "Original": {"all": t1, "pk": t2, "non_pk": t3},
-        "2NF":      {"all": t4, "pk": t5, "non_pk": t6},
-        "3NF":      {...},
-        "BCNF":     {...},
-        "4NF":      {...}
-      }
+    Тестирование производительности с улучшенной диагностикой
     """
     conn = connect()
     results: Dict[str, Dict[str, float]] = {}
+
     try:
-        # ----------------- 1) Создание и заполнение исходной таблицы -----------------
+        print(f"\n[INFO] === НАЧАЛО ТЕСТА ПРОИЗВОДИТЕЛЬНОСТИ ===")
+        print(f"[INFO] Параметры: {num_rows} строк, {repeats} повторений")
+
+        # Создание и заполнение исходной таблицы
         drop_table_if_exists(conn, orig_rel.name)
         create_table(conn, orig_rel)
         insert_random_data(conn, orig_rel, num_rows)
 
-        # ----------------- 2) Декомпозиция для каждого уровня -----------------
-        res_2nf = Decomposer.decompose_to_2nf(orig_rel)
-        rels_2nf = res_2nf.decomposed_relations
+        # Создание индексов для оптимизации запросов
+        create_query_indexes(conn, orig_rel)
 
-        res_3nf = Decomposer.decompose_to_3nf(orig_rel)
-        rels_3nf = res_3nf.decomposed_relations
+        # Проверка данных
+        actual_count = count_rows(conn, orig_rel.name)
+        print(f"[INFO] Таблица {orig_rel.name} создана, строк: {actual_count}")
 
-        res_bcnf = Decomposer.decompose_to_bcnf(orig_rel)
-        rels_bcnf = res_bcnf.decomposed_relations
+        # Определяем текущую нормальную форму
+        analyzer = NormalFormAnalyzer(orig_rel)
+        current_nf, _ = analyzer.determine_normal_form()
+        print(f"[INFO] Текущая нормальная форма: {current_nf.value}")
 
-        res_4nf = Decomposer.decompose_to_4nf(orig_rel)
-        rels_4nf = res_4nf.decomposed_relations
+        # Определяем уровни для тестирования
+        nf_order = [NormalForm.SECOND_NF, NormalForm.THIRD_NF, NormalForm.BCNF, NormalForm.FOURTH_NF]
+        levels_to_test = [nf for nf in nf_order if current_nf.value < nf.value]
 
-        # ----------------- 3) Создание и заполнение таблиц для каждого шага -----------------
-        for level_name, rels in [("2NF", rels_2nf), ("3NF", rels_3nf), ("BCNF", rels_bcnf), ("4NF", rels_4nf)]:
-            for r in rels:
-                drop_table_if_exists(conn, r.name)
-                # Создаём таблицу без первичного ключа
-                cols_sql = [f"{attr.name} {sql_type_for(attr)}" for attr in r.attributes]
-                create_sql = f"CREATE TABLE {r.name} (\n    " + ",\n    ".join(cols_sql) + "\n);"
-                with conn.cursor() as cur:
-                    cur.execute(create_sql)
-                conn.commit()
+        if not levels_to_test:
+            print(f"[WARNING] Отношение уже в максимальной форме {current_nf.value}")
+            levels_to_test = nf_order  # Тестируем все уровни для демонстрации
 
-                # Заполняем через SELECT DISTINCT из исходной
-                cols_list = ", ".join(attr.name for attr in r.attributes)
-                proj_sql = f"INSERT INTO {r.name} ({cols_list}) SELECT DISTINCT {cols_list} FROM {orig_rel.name};"
-                with conn.cursor() as cur:
-                    cur.execute(proj_sql)
-                conn.commit()
+        print(f"[INFO] Будут протестированы уровни: {[nf.value for nf in levels_to_test]}")
 
-        # ----------------- 4) Собираем запросы для всех уровней -----------------
-        all_levels_queries: Dict[str, Dict[str, str]] = {}
+        # Декомпозиция
+        decompositions = {}
 
-        # Для Original
-        q_original = _build_select_queries(orig_rel, [])
-        all_levels_queries["Original"] = q_original["Original"]
+        if NormalForm.SECOND_NF in levels_to_test:
+            print(f"\n[INFO] Выполняется декомпозиция в 2НФ...")
+            decompositions["2NF"] = Decomposer.decompose_to_2nf(orig_rel)
 
-        # Для 2NF
-        q_2nf = _build_select_queries(orig_rel, rels_2nf)
-        # Извлекаем единственный ключ, отличный от "Original"
-        level_key_2nf = next(k for k in q_2nf if k != "Original")
-        all_levels_queries["2NF"] = q_2nf[level_key_2nf]
+        if NormalForm.THIRD_NF in levels_to_test:
+            print(f"\n[INFO] Выполняется декомпозиция в 3НФ...")
+            decompositions["3NF"] = Decomposer.decompose_to_3nf(orig_rel)
 
-        # Для 3NF
-        q_3nf = _build_select_queries(orig_rel, rels_3nf)
-        level_key_3nf = next(k for k in q_3nf if k != "Original")
-        all_levels_queries["3NF"] = q_3nf[level_key_3nf]
+        if NormalForm.BCNF in levels_to_test:
+            print(f"\n[INFO] Выполняется декомпозиция в НФБК...")
+            decompositions["BCNF"] = Decomposer.decompose_to_bcnf(orig_rel)
 
-        # Для BCNF
-        q_bcnf = _build_select_queries(orig_rel, rels_bcnf)
-        level_key_bcnf = next(k for k in q_bcnf if k != "Original")
-        all_levels_queries["BCNF"] = q_bcnf[level_key_bcnf]
+        if NormalForm.FOURTH_NF in levels_to_test:
+            print(f"\n[INFO] Выполняется декомпозиция в 4НФ...")
+            decompositions["4NF"] = Decomposer.decompose_to_4nf(orig_rel)
 
-        # Для 4NF
-        q_4nf = _build_select_queries(orig_rel, rels_4nf)
-        level_key_4nf = next(k for k in q_4nf if k != "Original")
-        all_levels_queries["4NF"] = q_4nf[level_key_4nf]
+        # Создание таблиц для каждого уровня
+        for level_name, decomp_result in decompositions.items():
+            print(f"\n[INFO] Создание таблиц для {level_name}...")
 
-        # ----------------- 5) Замеряем время выполнения -----------------
-        for level_name, qdict in all_levels_queries.items():
+            for rel in decomp_result.decomposed_relations:
+                drop_table_if_exists(conn, rel.name)
+
+            create_and_populate_normalized(conn, orig_rel, decomp_result.decomposed_relations)
+
+            for rel in decomp_result.decomposed_relations:
+                create_query_indexes(conn, rel)
+                count = count_rows(conn, rel.name)
+                print(f"  - {rel.name}: {count} строк")
+
+        # Измерение производительности
+        print("\n[INFO] === ИЗМЕРЕНИЕ ПРОИЗВОДИТЕЛЬНОСТИ ===")
+
+        # Запросы для исходной таблицы
+        print("\n[INFO] Тестирование Original...")
+        orig_queries = _build_realistic_select_queries(orig_rel, [])
+        results["Original"] = {}
+
+        for query_type, sql in orig_queries["Original"].items():
+            if sql and sql.strip():
+                print(f"\n[INFO] Original/{query_type}:")
+                print(f"  SQL: {sql[:100]}...")
+                results["Original"][query_type] = _time_query(conn, sql, repeats)
+            else:
+                print(f"[WARNING] Пропущен пустой запрос Original/{query_type}")
+                results["Original"][query_type] = float("nan")
+
+        # Запросы для нормализованных таблиц
+        for level_name, decomp_result in decompositions.items():
+            print(f"\n[INFO] Тестирование {level_name}...")
             results[level_name] = {}
-            for qname, sql in qdict.items():
-                if not sql:
-                    results[level_name][qname] = float("nan")
-                else:
-                    print(f"[TIME-TEST] Level={level_name}, Query={qname}, SQL={sql.strip()}")
-                    t = _time_query(conn, sql, repeats=repeats)
-                    results[level_name][qname] = t
 
+            level_queries = _build_realistic_select_queries(orig_rel, decomp_result.decomposed_relations)
+
+            if level_name in level_queries:
+                for query_type, sql in level_queries[level_name].items():
+                    if sql and sql.strip():
+                        print(f"\n[INFO] {level_name}/{query_type}:")
+                        print(f"  SQL: {sql[:100]}...")
+                        results[level_name][query_type] = _time_query(conn, sql, repeats)
+                    else:
+                        print(f"[WARNING] Пропущен пустой запрос {level_name}/{query_type}")
+                        results[level_name][query_type] = float("nan")
+            else:
+                print(f"[ERROR] Не удалось построить запросы для {level_name}")
+                # Заполняем NaN значениями
+                for query_type in ["pk_point_lookup", "pk_range_scan", "non_pk_filter", "aggregation", "ordered_limit"]:
+                    results[level_name][query_type] = float("nan")
+
+        print("\n[INFO] === ТЕСТ ЗАВЕРШЕН ===")
+
+        # Выводим итоговую таблицу результатов
+        print("\nИТОГОВАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ (время в секундах):")
+        print("-" * 80)
+        print(
+            f"{'Уровень':<10} | {'PK lookup':<12} | {'PK range':<12} | {'Non-PK':<12} | {'Aggregation':<12} | {'Order+Limit':<12}")
+        print("-" * 80)
+
+        for level in ["Original", "2NF", "3NF", "BCNF", "4NF"]:
+            if level in results:
+                row = f"{level:<10} |"
+                for qt in ["pk_point_lookup", "pk_range_scan", "non_pk_filter", "aggregation", "ordered_limit"]:
+                    val = results[level].get(qt, float("nan"))
+                    if not np.isnan(val):
+                        row += f" {val:>11.4f} |"
+                    else:
+                        row += f" {'N/A':>11} |"
+                print(row)
+
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         conn.close()
 
     return results
 
 
-
 def plot_performance(results: Dict[str, Dict[str, float]]):
     """
-    По словарю results строит графики (matplotlib), где по оси X — уровни нормализации,
-    а по оси Y — время выполнения (секунды) для каждого типа запроса (all, pk, non_pk).
+    Построение графиков производительности с использованием паттернов заполнения
+    вместо цветов для лучшей различимости.
     """
-    # Упорядочим уровни:
-    levels_order = ["Original", "2NF", "3NF", "BCNF", "4NF"]
+    # Определяем доступные уровни из результатов
+    available_levels = []
+    for level in ["Original", "2NF", "3NF", "BCNF", "4NF"]:
+        if level in results:
+            available_levels.append(level)
+
     query_types = ["all", "pk", "non_pk"]
+
+    # Паттерны заполнения для различения столбцов
+    hatches = ['', '///', '\\\\\\', '|||', '---', '+++', 'xxx', 'ooo']
 
     # Подготовим данные
     x = []
     data = {q: [] for q in query_types}
-    for lvl in levels_order:
-        if lvl in results:
-            x.append(lvl)
-            for qt in query_types:
-                data[qt].append(results[lvl].get(qt, float("nan")))
-    # Сделаем отдельный график для каждого типа запроса
-    for qt in query_types:
-        plt.figure(figsize=(8,4))
+    for lvl in available_levels:
+        x.append(lvl)
+        for qt in query_types:
+            data[qt].append(results[lvl].get(qt, float("nan")))
+
+    # Создаем общую фигуру с подграфиками
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for idx, qt in enumerate(query_types):
+        ax = axes[idx]
         y = data[qt]
-        plt.plot(x, y, marker='o')
-        plt.title(f"Время выполнения SELECT-{qt}")
-        plt.xlabel("Уровень нормализации")
-        plt.ylabel("Время (сек)")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
 
+        # Создаем столбчатую диаграмму с паттернами
+        bars = ax.bar(x, y, color='lightgray', edgecolor='black', linewidth=1.5)
 
+        # Применяем разные паттерны к столбцам
+        for i, bar in enumerate(bars):
+            bar.set_hatch(hatches[i % len(hatches)])
+
+        ax.set_title(f"Время выполнения SELECT-{qt}", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Уровень нормализации", fontsize=10)
+        ax.set_ylabel("Время (сек)", fontsize=10)
+        ax.grid(True, axis='y', alpha=0.3)
+
+        # Добавляем значения на столбцы
+        for i, v in enumerate(y):
+            if not np.isnan(v):
+                ax.text(i, v, f'{v:.3f}', ha='center', va='bottom', fontsize=9)
+
+    # Добавляем легенду с паттернами
+    legend_elements = []
+    for i, level in enumerate(available_levels):
+        patch = mpatches.Patch(facecolor='lightgray', edgecolor='black',
+                               hatch=hatches[i % len(hatches)], label=level)
+        legend_elements.append(patch)
+
+    fig.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(0.98, 0.98))
+
+    plt.tight_layout()
+    plt.show()
