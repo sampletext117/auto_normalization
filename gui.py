@@ -19,7 +19,7 @@ from analyzer import NormalFormAnalyzer
 from decomposition import Decomposer
 from visualization import VisualizationWindow, add_visualization_to_gui # MODIFIED: Added add_visualization_to_gui
 from data_test import test_decomposition, DB_PARAMS
-from performance_test import run_performance_test, plot_performance
+from performance_test import run_performance_test, plot_performance_histogram
 from memory_test import run_memory_test, plot_memory_usage
 
 
@@ -220,7 +220,6 @@ class NormalizationGUI:
         info_label.pack(side='left', padx=20)
 
         return result_window, text_widget
-
 
     def create_menu(self):
         """Создание меню"""
@@ -900,7 +899,6 @@ class NormalizationGUI:
 
         ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
 
-
     def run_performance_gui(self):
         """Запустить измерение производительности SELECT-запросов."""
         if not self.normalization_result:
@@ -918,38 +916,214 @@ class NormalizationGUI:
 
         orig_rel = self.normalization_result.original_relation
 
-        # Перехват stdout для логов
-        import io
-        from contextlib import redirect_stdout
-        buf = io.StringIO()
-        try:
-            with redirect_stdout(buf):
-                # Вызываем обновлённый run_performance_test
-                results = run_performance_test(orig_rel, num_rows=num_rows, repeats=1000)
-                # Строим графики
-                plot_performance(results)
-        except Exception as e:
-            buf.write("\n[ERROR] При выполнении теста производительности:\n")
-            print(e)
-            buf.write(str(e))
+        # Создаем прогресс-диалог
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Выполнение теста производительности")
+        progress_window.geometry("400x150")
+        progress_window.transient(self.root)
+        progress_window.grab_set()
 
-        log = buf.getvalue()
+        ttk.Label(progress_window, text="Выполняется тест производительности запросов...",
+                  font=("Arial", 10)).pack(pady=20)
+        progress_bar = ttk.Progressbar(progress_window, mode='indeterminate', length=300)
+        progress_bar.pack(pady=10)
+        progress_bar.start(10)
 
-        # Показать текстовый лог во всплывающем окне
-        popup = tk.Toplevel(self.root)
-        popup.title("Лог теста производительности")
-        popup.geometry("700x500")
+        # Запускаем тест в отдельном потоке
+        import threading
+        results = {}
+        error = None
 
-        lbl = ttk.Label(popup, text=f"Лог теста производительности (строк: {num_rows}):",
-                        font=("Arial", 10, "bold"))
-        lbl.pack(anchor='nw', padx=5, pady=(5, 0))
+        def run_test():
+            nonlocal results, error
+            try:
+                # Вызываем обновленный run_performance_test
+                results = run_performance_test(orig_rel, num_rows=num_rows, repeats=10)
+            except Exception as e:
+                error = str(e)
+                import traceback
+                traceback.print_exc()
 
-        txt = scrolledtext.ScrolledText(popup, wrap=tk.NONE)
-        txt.pack(fill='both', expand=True, padx=5, pady=5)
-        txt.insert("1.0", log)
-        txt.configure(state="disabled")
+        # Запускаем тест
+        test_thread = threading.Thread(target=run_test)
+        test_thread.start()
 
-        ttk.Button(popup, text="Закрыть", command=popup.destroy).pack(pady=(0,5))
+        # Ждем завершения
+        def check_completion():
+            if test_thread.is_alive():
+                progress_window.after(100, check_completion)
+            else:
+                progress_bar.stop()
+                progress_window.destroy()
+
+                if error:
+                    messagebox.showerror("Ошибка", f"Ошибка при выполнении теста производительности:\n{error}")
+                elif results:
+                    # Показываем результаты в отдельном окне
+                    self.show_performance_results(results)
+                    # Строим гистограммы вместо графиков
+                    try:
+                        from performance_test import plot_performance_histogram
+                        plot_performance_histogram(results)
+                    except Exception as e:
+                        print(f"Ошибка при построении графиков: {e}")
+                else:
+                    messagebox.showwarning("Ошибка", "Не удалось получить результаты теста")
+
+        progress_window.after(100, check_completion)
+
+    def show_performance_results(self, results: Dict[str, Dict[str, float]]):
+        """Показать результаты теста производительности в отдельном окне"""
+        result_window = tk.Toplevel(self.root)
+        result_window.title("Результаты теста производительности")
+        result_window.geometry("900x700")
+
+        # Создаем текстовое поле с прокруткой
+        text_frame = ttk.Frame(result_window)
+        text_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        text_widget = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, font=("Courier", 9))
+        text_widget.pack(fill='both', expand=True)
+
+        # Формируем отчет
+        report = "РЕЗУЛЬТАТЫ ТЕСТА ПРОИЗВОДИТЕЛЬНОСТИ ЗАПРОСОВ\n"
+        report += "=" * 80 + "\n\n"
+
+        # Описания типов запросов
+        query_descriptions = {
+            'full_scan': 'Полное сканирование таблицы',
+            'pk_lookup': 'Поиск записи по первичному ключу',
+            'aggregation': 'Агрегация данных (COUNT)',
+            'group_by': 'Группировка данных',
+            'filter_non_indexed': 'Фильтрация по неиндексированному полю',
+            'full_join': 'Полное соединение всех таблиц',
+            'join_with_filter': 'JOIN с условием фильтрации',
+            'single_table': 'Запрос к одной таблице',
+            'join_aggregation': 'Агрегация после JOIN',
+            'subquery': 'Запрос с подзапросом'
+        }
+
+        # Сводная таблица
+        report += "Сводная таблица времени выполнения (мс):\n"
+        report += "-" * 80 + "\n"
+
+        # Собираем все типы запросов
+        all_query_types = set()
+        for level_queries in results.values():
+            all_query_types.update(level_queries.keys())
+        all_query_types = sorted(list(all_query_types))
+
+        # Заголовок таблицы
+        header = f"{'Тип запроса':<30}"
+        for level in results.keys():
+            header += f" | {level:>12}"
+        report += header + "\n"
+        report += "-" * 80 + "\n"
+
+        # Данные таблицы
+        for qt in all_query_types:
+            desc = query_descriptions.get(qt, qt)
+            row = f"{desc:<30}"
+
+            for level in results.keys():
+                if qt in results[level]:
+                    time_ms = results[level][qt] * 1000
+                    row += f" | {time_ms:>10.2f} "
+                else:
+                    row += f" | {'—':>12}"
+
+            report += row + "\n"
+
+        report += "-" * 80 + "\n\n"
+
+        # Анализ результатов
+        report += "АНАЛИЗ РЕЗУЛЬТАТОВ:\n"
+        report += "=" * 80 + "\n\n"
+
+        # Находим самые быстрые и медленные запросы для каждого уровня
+        for level in results.keys():
+            report += f"{level}:\n"
+
+            if results[level]:
+                # Сортируем по времени
+                sorted_queries = sorted(results[level].items(), key=lambda x: x[1])
+
+                # Самый быстрый
+                fastest_query, fastest_time = sorted_queries[0]
+                report += f"  ✓ Самый быстрый: {query_descriptions.get(fastest_query, fastest_query)} "
+                report += f"({fastest_time * 1000:.2f} мс)\n"
+
+                # Самый медленный
+                slowest_query, slowest_time = sorted_queries[-1]
+                report += f"  ✗ Самый медленный: {query_descriptions.get(slowest_query, slowest_query)} "
+                report += f"({slowest_time * 1000:.2f} мс)\n"
+
+                # Среднее время
+                avg_time = sum(results[level].values()) / len(results[level])
+                report += f"  • Среднее время: {avg_time * 1000:.2f} мс\n"
+
+            report += "\n"
+
+        # Выводы
+        report += "ВЫВОДЫ:\n"
+        report += "=" * 80 + "\n"
+
+        # Сравнение JOIN запросов
+        join_times = {}
+        for level, queries in results.items():
+            for qt, time in queries.items():
+                if 'join' in qt:
+                    if level not in join_times:
+                        join_times[level] = []
+                    join_times[level].append(time)
+
+        if join_times:
+            report += "\n1. Производительность JOIN-запросов:\n"
+            for level, times in join_times.items():
+                avg_join_time = sum(times) / len(times) if times else 0
+                report += f"   - {level}: среднее время JOIN = {avg_join_time * 1000:.2f} мс\n"
+
+        # Влияние нормализации на простые запросы
+        simple_query_impact = {}
+        for qt in ['full_scan', 'pk_lookup', 'single_table']:
+            times_by_level = {}
+            for level, queries in results.items():
+                if qt in queries:
+                    times_by_level[level] = queries[qt]
+
+            if len(times_by_level) > 1:
+                simple_query_impact[qt] = times_by_level
+
+        if simple_query_impact:
+            report += "\n2. Влияние нормализации на простые запросы:\n"
+            for qt, times in simple_query_impact.items():
+                report += f"   - {query_descriptions.get(qt, qt)}:\n"
+                base_time = list(times.values())[0]
+                for level, time in times.items():
+                    change = ((time - base_time) / base_time * 100) if base_time > 0 else 0
+                    report += f"     • {level}: {time * 1000:.2f} мс"
+                    if change != 0:
+                        report += f" ({change:+.1f}%)"
+                    report += "\n"
+
+        # Вставляем отчет в текстовое поле
+        text_widget.insert('1.0', report)
+        self.make_text_readonly_but_copyable(text_widget)
+
+        # Кнопки
+        button_frame = ttk.Frame(result_window)
+        button_frame.pack(fill='x', padx=5, pady=5)
+
+        def copy_all():
+            text_widget.tag_add("sel", "1.0", "end")
+            text_widget.event_generate("<<Copy>>")
+            copy_label = ttk.Label(button_frame, text="Скопировано!", foreground="green")
+            copy_label.pack(side='left', padx=10)
+            result_window.after(2000, copy_label.destroy)
+
+        ttk.Button(button_frame, text="Копировать отчет", command=copy_all).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Закрыть", command=result_window.destroy).pack(side='right', padx=5)
+
 
     def run_memory_test_gui(self):
         """Запустить тест использования памяти"""
@@ -1062,11 +1236,11 @@ class NormalizationGUI:
 
         progress_window.after(100, check_completion)
 
-    def show_memory_test_results(self, results: Dict[str, Dict[str, Dict[str, any]]]):
-        """Показать результаты теста памяти с реальными метриками избыточности"""
+    def show_memory_test_results(self, results: Dict[str, Dict[str, Dict[str, int]]]):
+        """Показать результаты теста памяти в отдельном окне"""
         result_window = tk.Toplevel(self.root)
         result_window.title("Результаты теста памяти")
-        result_window.geometry("900x700")
+        result_window.geometry("800x600")
 
         # Создаем текстовое поле с прокруткой
         text_frame = ttk.Frame(result_window)
@@ -1077,17 +1251,15 @@ class NormalizationGUI:
 
         # Формируем отчет
         report = "РЕЗУЛЬТАТЫ ТЕСТА ИСПОЛЬЗОВАНИЯ ПАМЯТИ\n"
-        report += "=" * 80 + "\n\n"
+        report += "=" * 70 + "\n\n"
 
         # Сводная таблица
-        report += "Сводная таблица размеров и эффективности:\n"
-        report += "-" * 80 + "\n"
-        report += f"{'Уровень':<10} | {'Без индексов':>12} | {'С индексами':>12} | {'Индексы':>10} | "
-        report += f"{'Избыточность':>12} | {'Устранено':>10}\n"
-        report += "-" * 80 + "\n"
+        report += "Сводная таблица размеров (в КБ):\n"
+        report += "-" * 70 + "\n"
+        report += f"{'Уровень':<10} | {'Без индексов':>15} | {'С индексами':>15} | {'Индексы':>12} | {'Изменение':>10}\n"
+        report += "-" * 70 + "\n"
 
         original_size = results.get("Original", {}).get("with_indexes", {}).get("total_size", 1)
-        original_redundancy = results.get("Original", {}).get("redundancy_metrics", {}).get("redundancy_ratio", 0) * 100
 
         for level in ["Original", "2NF", "3NF", "BCNF", "4NF"]:
             if level in results:
@@ -1096,107 +1268,67 @@ class NormalizationGUI:
                 idx_size = results[level]["with_indexes"]["indexes_size"] / 1024
 
                 if level == "Original":
-                    redundancy = original_redundancy
-                    eliminated = 0
+                    change = "базовый"
                 else:
-                    eff_metrics = results[level].get("efficiency_metrics", {})
-                    redundancy = eff_metrics.get("normalized_redundancy", 0)
-                    eliminated = eff_metrics.get("redundancy_elimination", 0)
+                    change_pct = ((size_with_idx * 1024 - original_size) / original_size) * 100
+                    change = f"{change_pct:+.1f}%"
 
-                report += f"{level:<10} | {size_no_idx:>12.2f} | {size_with_idx:>12.2f} | "
-                report += f"{idx_size:>10.2f} | {redundancy:>12.1f}% | {eliminated:>10.1f}%\n"
+                report += f"{level:<10} | {size_no_idx:>15.2f} | {size_with_idx:>15.2f} | {idx_size:>12.2f} | {change:>10}\n"
 
-        report += "-" * 80 + "\n\n"
+        report += "-" * 70 + "\n\n"
 
         # Детальная информация
-        report += "Детальная информация по уровням:\n"
-        report += "=" * 80 + "\n\n"
+        report += "Детальная информация:\n"
+        report += "=" * 70 + "\n\n"
 
         for level, level_data in results.items():
             report += f"{level}:\n"
-            report += "-" * 40 + "\n"
+            report += "-" * 30 + "\n"
 
             without_idx = level_data["without_indexes"]
             with_idx = level_data["with_indexes"]
 
-            report += f"  Статистика размеров:\n"
+            report += f"  Без индексов:\n"
             report += f"    - Размер таблиц: {without_idx['table_size'] / 1024:.2f} КБ\n"
-            report += f"    - Размер индексов: {with_idx['indexes_size'] / 1024:.2f} КБ\n"
-            report += f"    - Общий размер: {with_idx['total_size'] / 1024:.2f} КБ\n"
+            report += f"    - Общий размер: {without_idx['total_size'] / 1024:.2f} КБ\n"
             report += f"    - Количество строк: {without_idx['row_count']}\n"
 
+            report += f"  С индексами:\n"
+            report += f"    - Размер таблиц: {with_idx['table_size'] / 1024:.2f} КБ\n"
+            report += f"    - Размер индексов: {with_idx['indexes_size'] / 1024:.2f} КБ\n"
+            report += f"    - Общий размер: {with_idx['total_size'] / 1024:.2f} КБ\n"
+
+            # Эффективность хранения
             if without_idx['row_count'] > 0:
-                avg_row_size = with_idx['table_size'] / without_idx['row_count']
-                report += f"    - Средний размер строки: {avg_row_size:.2f} байт\n"
-
-            # Метрики избыточности
-            if level == "Original":
-                redundancy_metrics = level_data.get("redundancy_metrics", {})
-                if redundancy_metrics:
-                    report += f"\n  Анализ избыточности:\n"
-                    report += f"    - Общая избыточность: {redundancy_metrics['redundancy_ratio'] * 100:.1f}%\n"
-                    report += f"    - Дубликаты полных строк: {redundancy_metrics.get('duplicate_rows', 0)}\n"
-                    report += f"    - Уникальных строк: {redundancy_metrics.get('unique_rows', 0)}\n"
-
-                    # Избыточность по атрибутам
-                    attr_redundancy = redundancy_metrics.get('attribute_redundancy', {})
-                    if attr_redundancy:
-                        report += f"    - Избыточность по атрибутам:\n"
-                        for attr_name, redundancy in sorted(attr_redundancy.items()):
-                            report += f"        {attr_name}: {redundancy * 100:.1f}%\n"
-            else:
-                # Для нормализованных уровней
-                eff_metrics = level_data.get("efficiency_metrics", {})
-                if eff_metrics:
-                    report += f"\n  Эффективность нормализации:\n"
-                    report += f"    - Исходная избыточность: {eff_metrics.get('original_redundancy', 0):.1f}%\n"
-                    report += f"    - Текущая избыточность: {eff_metrics.get('normalized_redundancy', 0):.1f}%\n"
-                    report += f"    - Устранено избыточности: {eff_metrics.get('redundancy_elimination', 0):.1f}%\n"
-                    report += f"    - Эффективность пространства: {eff_metrics.get('space_efficiency', 0):.1f}%\n"
-                    report += f"    - Дублирование ключей: {eff_metrics.get('key_overhead', 0)} раз\n"
-                    report += f"    - Множитель строк: {eff_metrics.get('row_multiplication_factor', 1):.2f}x\n"
+                bytes_per_row = with_idx['total_size'] / without_idx['row_count']
+                report += f"    - Байт на строку: {bytes_per_row:.2f}\n"
 
             report += "\n"
 
-        # Выводы и рекомендации
-        report += "ВЫВОДЫ И РЕКОМЕНДАЦИИ:\n"
-        report += "=" * 80 + "\n"
+        # Выводы
+        report += "ВЫВОДЫ:\n"
+        report += "=" * 70 + "\n"
 
-        # Анализ эффективности
-        best_space_efficiency = 0
-        best_level = "Original"
+        # Находим самый экономный уровень
         min_size = float('inf')
-        size_optimal_level = "Original"
+        min_level = ""
+        max_size = 0
+        max_level = ""
 
-        for level in ["2NF", "3NF", "BCNF", "4NF"]:
-            if level in results:
-                eff = results[level].get("efficiency_metrics", {}).get("space_efficiency", 0)
-                if eff > best_space_efficiency:
-                    best_space_efficiency = eff
-                    best_level = level
+        for level, level_data in results.items():
+            size = level_data["with_indexes"]["total_size"]
+            if size < min_size:
+                min_size = size
+                min_level = level
+            if size > max_size:
+                max_size = size
+                max_level = level
 
-                size = results[level]["with_indexes"]["total_size"]
-                if size < min_size:
-                    min_size = size
-                    size_optimal_level = level
-
-        report += f"- Наиболее эффективный уровень по устранению избыточности: {best_level} "
-        report += f"({best_space_efficiency:.1f}% эффективности)\n"
-        report += f"- Наименьший размер хранения: {size_optimal_level} "
-        report += f"({min_size / 1024:.2f} КБ)\n"
-
-        # Рекомендации
-        if best_space_efficiency > 70:
-            report += "\nРекомендация: Высокая эффективность устранения избыточности достигнута. "
-            report += f"Рекомендуется использовать {best_level} для оптимального баланса между "
-            report += "нормализацией и производительностью.\n"
-        elif best_space_efficiency > 40:
-            report += "\nРекомендация: Умеренная эффективность устранения избыточности. "
-            report += "Рассмотрите возможность частичной денормализации для улучшения производительности "
-            report += "критичных запросов.\n"
-        else:
-            report += "\nРекомендация: Низкая эффективность устранения избыточности. "
-            report += "Возможно, исходная схема уже оптимальна или требуется пересмотр структуры данных.\n"
+        if min_level and max_level:
+            saving_pct = ((max_size - min_size) / max_size) * 100
+            report += f"- Наиболее экономный уровень: {min_level} ({min_size / 1024:.2f} КБ)\n"
+            report += f"- Наиболее затратный уровень: {max_level} ({max_size / 1024:.2f} КБ)\n"
+            report += f"- Потенциальная экономия: {saving_pct:.1f}%\n"
 
         # Вставляем отчет в текстовое поле
         text_widget.insert('1.0', report)
