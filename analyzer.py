@@ -43,21 +43,31 @@ class NormalFormAnalyzer:
             violations.extend(nf1_violations)
             return False, violations
 
-        # Проверяем отсутствие частичных зависимостей
+        # Если все ключи состоят из одного атрибута, отношение автоматически в 2НФ
+        if all(len(key) == 1 for key in self.candidate_keys):
+            return True, []
+
+        # Проверяем частичные зависимости от составных ключей
         for fd in self.relation.functional_dependencies:
-            # Проверяем только зависимости непростых атрибутов
-            if not fd.dependent.issubset(self.non_prime_attributes):
+            # Пропускаем тривиальные зависимости
+            if fd.is_trivial():
                 continue
 
-            # Проверяем, является ли детерминант частью какого-либо ключа
+            # Проверяем только зависимости, где зависимые атрибуты непростые
+            dependent_non_prime = fd.dependent & self.non_prime_attributes
+            if not dependent_non_prime:
+                continue
+
+            # Проверяем, является ли детерминант частью какого-либо составного ключа
             for key in self.candidate_keys:
-                if fd.determinant.issubset(key) and fd.determinant != key:
+                if len(key) > 1 and fd.determinant.issubset(key) and fd.determinant != key:
                     # Это частичная зависимость
                     det_str = ", ".join([a.name for a in fd.determinant])
-                    dep_str = ", ".join([a.name for a in fd.dependent])
+                    dep_str = ", ".join([a.name for a in dependent_non_prime])
+                    key_str = ", ".join([a.name for a in key])
                     violations.append(
                         f"Частичная зависимость: {{{det_str}}} → {{{dep_str}}} "
-                        f"(детерминант - часть ключа)"
+                        f"(детерминант - часть ключа {{{key_str}}})"
                     )
                     break
 
@@ -79,18 +89,22 @@ class NormalFormAnalyzer:
                 continue
 
             # Проверяем условия 3НФ:
-            # 1. Детерминант является суперключом, или
-            # 2. Все зависимые атрибуты являются простыми
+            # ФЗ X→Y нарушает 3НФ, если:
+            # 1. X не является суперключом, И
+            # 2. Y-X содержит непростые атрибуты
 
             is_superkey = FDAlgorithms.is_superkey(fd.determinant, self.relation)
-            all_dependent_prime = fd.dependent.issubset(self.prime_attributes)
 
-            if not is_superkey and not all_dependent_prime:
+            # Вычисляем Y-X (атрибуты, которые есть в Y, но не в X)
+            dependent_minus_determinant = fd.dependent - fd.determinant
+            non_prime_in_dependent = dependent_minus_determinant & self.non_prime_attributes
+
+            if not is_superkey and non_prime_in_dependent:
                 det_str = ", ".join([a.name for a in fd.determinant])
-                dep_str = ", ".join([a.name for a in fd.dependent])
+                dep_str = ", ".join([a.name for a in non_prime_in_dependent])
                 violations.append(
-                    f"Транзитивная зависимость: {{{det_str}}} → {{{dep_str}}} "
-                    f"(детерминант не является суперключом, зависимые атрибуты не простые)"
+                    f"Нарушение 3НФ: {{{det_str}}} → {{{dep_str}}} "
+                    f"(детерминант не является суперключом, зависимые непростые атрибуты)"
                 )
 
         return len(violations) == 0, violations
@@ -98,16 +112,13 @@ class NormalFormAnalyzer:
     def check_bcnf(self) -> Tuple[bool, List[str]]:
         violations = []
 
-        # Сначала проверяем 3НФ
-        is_3nf, _ = self.check_3nf()
-        if not is_3nf:
-            # Для НФБК не обязательно быть в 3НФ, проверяем только 1НФ
-            is_1nf, nf1_violations = self.check_1nf()
-            if not is_1nf:
-                violations.extend(nf1_violations)
-                return False, violations
+        # Сначала проверяем 1НФ
+        is_1nf, nf1_violations = self.check_1nf()
+        if not is_1nf:
+            violations.extend(nf1_violations)
+            return False, violations
 
-        # Проверяем, что все детерминанты являются суперключами
+        # Проверяем, что все нетривиальные детерминанты являются суперключами
         for fd in self.relation.functional_dependencies:
             # Пропускаем тривиальные зависимости
             if fd.is_trivial():
@@ -135,13 +146,20 @@ class NormalFormAnalyzer:
         # Проверяем многозначные зависимости
         for mvd in self.relation.multivalued_dependencies:
             # Проверяем, что детерминант является суперключом
+            # или МЗД тривиальна (Y ∪ Z = R - X)
             if not FDAlgorithms.is_superkey(mvd.determinant, self.relation):
-                det_str = ", ".join([a.name for a in mvd.determinant])
-                dep_str = ", ".join([a.name for a in mvd.dependent])
-                violations.append(
-                    f"Нарушение 4НФ: {{{det_str}}} →→ {{{dep_str}}} "
-                    f"(нетривиальная многозначная зависимость, детерминант не суперключ)"
-                )
+                # Проверяем тривиальность
+                all_attrs = self.relation.get_all_attributes_set()
+                remaining = all_attrs - mvd.determinant - mvd.dependent
+
+                # МЗД X →→ Y тривиальна, если Y ∪ Z = R - X (где Z = R - X - Y)
+                if remaining:  # Если есть другие атрибуты, МЗД нетривиальна
+                    det_str = ", ".join([a.name for a in mvd.determinant])
+                    dep_str = ", ".join([a.name for a in mvd.dependent])
+                    violations.append(
+                        f"Нарушение 4НФ: {{{det_str}}} →→ {{{dep_str}}} "
+                        f"(нетривиальная многозначная зависимость, детерминант не суперключ)"
+                    )
 
         return len(violations) == 0, violations
 
@@ -156,12 +174,18 @@ class NormalFormAnalyzer:
 
         is_2nf, violations_2nf = self.check_2nf()
         if not is_2nf:
-            all_violations.extend(violations_2nf)
+            # Убираем дублирование нарушений 1НФ
+            for v in violations_2nf:
+                if v not in violations_1nf:
+                    all_violations.append(v)
             return NormalForm.FIRST_NF, all_violations
 
         is_3nf, violations_3nf = self.check_3nf()
         if not is_3nf:
-            all_violations.extend(violations_3nf)
+            # Убираем дублирование нарушений 2НФ
+            for v in violations_3nf:
+                if v not in violations_2nf:
+                    all_violations.append(v)
             return NormalForm.SECOND_NF, all_violations
 
         is_bcnf, violations_bcnf = self.check_bcnf()
@@ -192,6 +216,12 @@ class NormalFormAnalyzer:
         report += f"\nФункциональные зависимости ({len(self.relation.functional_dependencies)}):\n"
         for fd in self.relation.functional_dependencies:
             report += f"  - {fd}\n"
+
+        # Многозначные зависимости
+        if self.relation.multivalued_dependencies:
+            report += f"\nМногозначные зависимости ({len(self.relation.multivalued_dependencies)}):\n"
+            for mvd in self.relation.multivalued_dependencies:
+                report += f"  - {mvd}\n"
 
         # Ключи
         report += f"\nКандидатные ключи ({len(self.candidate_keys)}):\n"

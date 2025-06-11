@@ -221,28 +221,50 @@ def test_decomposition(orig_rel: Relation, normalized: List[Relation], num_rows:
             print(f"[INFO] В таблице {rel.name} после проекции {cnt} строк")
 
         # --- Шаг 3: выполнить JOIN всех normalized таблиц ---
-        if not normalized:
+        if not normalized or len(normalized) < 1:
             print("[WARNING] Нет нормализованных таблиц для проверки.")
             return
 
-        # Построить цепочку JOIN: начинаем с первой таблицы
-        join_clause = f"{normalized[0].name}"
-        used_aliases = {normalized[0].name: normalized[0]}
-        for rel in normalized[1:]:
-            # Найти общее пересечение атрибутов между rel и уже JOIN-нутыми
-            common = set(rel.get_all_attributes_set())
-            for prev_name, prev_rel in used_aliases.items():
-                common = common.intersection(prev_rel.get_all_attributes_set())
-            if not common:
-                # Если нет общих атрибутов, просто кросс-join (не гарантирует восстановление данных)
-                join_clause = f"{join_clause} CROSS JOIN {rel.name}"
+        # Улучшенная логика построения JOIN'ов
+        # Начинаем с первой таблицы
+        first_rel = normalized[0]
+        join_clause = first_rel.name
+        # Собираем все атрибуты, доступные в текущем JOIN
+        available_attrs = first_rel.get_all_attributes_set()
+        # Таблицы, которые уже в JOIN
+        joined_relations = {first_rel.name: first_rel}
+
+        for rel_to_join in normalized[1:]:
+            rel_attrs = rel_to_join.get_all_attributes_set()
+            # Ищем общие атрибуты между новой таблицей и ВСЕМИ уже доступными
+            common_attrs = available_attrs.intersection(rel_attrs)
+
+            if not common_attrs:
+                # Этого не должно происходить при корректной декомпозиции,
+                # но на всякий случай оставляем CROSS JOIN
+                join_clause += f" CROSS JOIN {rel_to_join.name}"
+                print(f"[WARNING] Не найдены общие столбцы для {rel_to_join.name}. Используется CROSS JOIN.")
             else:
-                # Для простоты берем первое общее имя
-                join_cols = [attr.name for attr in common]
-                # Пишем ON на равенство для всех общих
-                on_preds = " AND ".join([f"{rel.name}.{col} = {next(iter(used_aliases))}.{col}" for col in join_cols])
-                join_clause = f"{join_clause} JOIN {rel.name} ON {on_preds}"
-            used_aliases[rel.name] = rel
+                # Ищем, с какой из уже добавленных таблиц можно соединиться
+                target_table_name = None
+                for attr in common_attrs:
+                    for name, rel in joined_relations.items():
+                        if attr in rel.get_all_attributes_set():
+                            target_table_name = name
+                            break
+                    if target_table_name:
+                        break
+
+                # Строим условие ON по всем общим атрибутам
+                on_conditions = [
+                    f"{rel_to_join.name}.{attr.name} = {target_table_name}.{attr.name}"
+                    for attr in common_attrs
+                ]
+                join_clause += f" JOIN {rel_to_join.name} ON {' AND '.join(on_conditions)}"
+
+            # Обновляем информацию о доступных атрибутах и таблицах
+            available_attrs.update(rel_attrs)
+            joined_relations[rel_to_join.name] = rel_to_join
 
         join_sql = f"SELECT COUNT(*) FROM {join_clause};"
         print(f"[SQL-JOIN] {join_sql}")

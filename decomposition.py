@@ -294,10 +294,13 @@ class Decomposer:
         # Сначала приводим к НФБК
         bcnf_result = Decomposer.decompose_to_bcnf(relation)
 
+        analyzer = NormalFormAnalyzer(relation)
+        original_form, _ = analyzer.determine_normal_form()
+
         if not relation.multivalued_dependencies:
-            # Нет многозначных зависимостей
+            # Если нет многозначных зависимостей, отношение уже в 4НФ после НФБК
             return NormalizationResult(
-                original_form=bcnf_result.original_form,
+                original_form=original_form,
                 target_form=NormalForm.FOURTH_NF,
                 original_relation=relation,
                 decomposed_relations=bcnf_result.decomposed_relations,
@@ -308,53 +311,81 @@ class Decomposer:
 
         # Декомпозируем каждое отношение из НФБК по многозначным зависимостям
         steps = bcnf_result.steps.copy()
+        to_process = bcnf_result.decomposed_relations.copy()
         final_relations = []
 
-        for rel in bcnf_result.decomposed_relations:
-            # Проецируем многозначные зависимости на это отношение
-            proj_mvds = []
-            for mvd in relation.multivalued_dependencies:
-                if mvd.determinant.issubset(rel.get_all_attributes_set()):
-                    proj_dep = mvd.dependent & rel.get_all_attributes_set()
-                    if proj_dep and proj_dep != mvd.determinant:
-                        proj_mvds.append(mvd)
+        while to_process:
+            current_rel = to_process.pop(0)
 
-            if not proj_mvds:
-                final_relations.append(rel)
+            # Проецируем многозначные зависимости на текущее отношение
+            violating_mvd = None
+            current_attrs = current_rel.get_all_attributes_set()
+
+            for mvd in relation.multivalued_dependencies:
+                # МЗД применима, если все атрибуты детерминанта есть в текущем отношении
+                if not mvd.determinant.issubset(current_attrs):
+                    continue
+
+                # Вычисляем зависимую и независимую части в контексте текущего отношения
+                dependent_in_rel = mvd.dependent & current_attrs
+                independent_in_rel = current_attrs - mvd.determinant - dependent_in_rel
+
+                # Проверяем, что МЗД нетривиальна в контексте текущего отношения
+                if dependent_in_rel and independent_in_rel:
+                    # Проверяем, является ли детерминант суперключом
+                    if not FDAlgorithms.is_superkey(mvd.determinant, current_rel):
+                        violating_mvd = mvd
+                        break
+
+            if not violating_mvd:
+                # Отношение в 4НФ
+                final_relations.append(current_rel)
                 continue
 
-            # Декомпозируем по первой нарушающей МЗ
-            # (упрощенная версия - в реальности нужен более сложный алгоритм)
-            mvd = proj_mvds[0]
+            # Декомпозируем по нарушающей МЗД
+            # R1: детерминант + зависимые атрибуты
+            r1_attrs = list(violating_mvd.determinant | (violating_mvd.dependent & current_attrs))
+            r1_fds = Decomposer._project_fds(r1_attrs, current_rel.functional_dependencies)
+            r1 = Relation(
+                f"{current_rel.name}_4nf_{len(final_relations)}",
+                r1_attrs,
+                r1_fds
+            )
 
-            # R1: детерминант + зависимые
-            r1_attrs = list(mvd.determinant | mvd.dependent)
-            r1_fds = Decomposer._project_fds(r1_attrs, rel.functional_dependencies)
-            r1 = Relation(f"{rel.name}_4nf1", r1_attrs, r1_fds)
-
-            # R2: детерминант + остальные
-            remaining = rel.get_all_attributes_set() - mvd.dependent
-            r2_attrs = list(mvd.determinant | remaining)
-            r2_fds = Decomposer._project_fds(r2_attrs, rel.functional_dependencies)
-            r2 = Relation(f"{rel.name}_4nf2", r2_attrs, r2_fds)
+            # R2: детерминант + независимые атрибуты
+            independent_attrs = current_attrs - violating_mvd.dependent
+            r2_attrs = list(violating_mvd.determinant | independent_attrs)
+            r2_fds = Decomposer._project_fds(r2_attrs, current_rel.functional_dependencies)
+            r2 = Relation(
+                f"{current_rel.name}_4nf_{len(final_relations) + 1}",
+                r2_attrs,
+                r2_fds
+            )
 
             step = DecompositionStep(
-                original_relation=rel,
+                original_relation=current_rel,
                 resulting_relations=[r1, r2],
-                reason=f"Устранение многозначной зависимости: {mvd}"
+                reason=f"Устранение многозначной зависимости: {violating_mvd}"
             )
             steps.append(step)
 
-            final_relations.extend([r1, r2])
+            # Добавляем для дальнейшей обработки
+            to_process.extend([r1, r2])
+
+        # Проверяем сохранение зависимостей
+        preserved, lost = Decomposer._check_dependency_preservation(
+            relation.functional_dependencies,
+            final_relations
+        )
 
         return NormalizationResult(
-            original_form=bcnf_result.original_form,
+            original_form=original_form,
             target_form=NormalForm.FOURTH_NF,
             original_relation=relation,
             decomposed_relations=final_relations,
             steps=steps,
-            preserved_dependencies=bcnf_result.preserved_dependencies,
-            lost_dependencies=bcnf_result.lost_dependencies
+            preserved_dependencies=preserved,
+            lost_dependencies=lost
         )
 
     @staticmethod
