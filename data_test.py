@@ -1,3 +1,4 @@
+## data_test.py
 # файл: data_test.py
 
 import psycopg2
@@ -91,21 +92,120 @@ def rand_date(start_year=2000, end_year=2020) -> datetime.date:
 
 
 def generate_value_for(attr: Attribute) -> Any:
-    """Сгенерировать тестовое значение для данного атрибута."""
+    """
+    Сгенерировать тестовое значение для атрибута с учетом избыточности.
+    Создаем МНОГО повторяющихся значений для демонстрации эффекта нормализации.
+    """
     dt = attr.data_type.upper()
+
+    # --- Генерация для НЕКЛЮЧЕВЫХ полей (с ОЧЕНЬ ВЫСОКОЙ избыточностью) ---
+    if not attr.is_primary_key:
+        if dt == "INTEGER":
+            # Очень ограниченный набор значений для создания избыточности
+            if "отдел" in attr.name.lower() or "департамент" in attr.name.lower():
+                return random.randint(1, 5)  # Всего 5 отделов
+            elif "курс" in attr.name.lower() or "проект" in attr.name.lower():
+                return random.randint(1, 8)  # 8 курсов/проектов
+            elif "клиент" in attr.name.lower():
+                return random.randint(1, 20)  # 20 клиентов
+            elif "товар" in attr.name.lower():
+                return random.randint(1, 15)  # 15 товаров
+            elif "оценка" in attr.name.lower():
+                return random.randint(2, 5)  # Оценки 2-5
+            elif "количество" in attr.name.lower():
+                return random.randint(1, 10)  # Количество 1-10
+            else:
+                return random.randint(1, 8)  # Общий случай
+                
+        if dt.startswith("VARCHAR"):
+            # Очень ограниченный набор названий для максимальной избыточности
+            attr_lower = attr.name.lower()
+            if "отдел" in attr_lower:
+                departments = ["ИТ", "Финансы", "HR", "Маркетинг", "Продажи"]
+                return random.choice(departments)
+            elif "проект" in attr_lower and "название" in attr_lower:
+                projects = ["Проект_Альфа", "Проект_Бета", "Проект_Гамма", "Проект_Дельта", "Проект_Омега"]
+                return random.choice(projects)
+            elif "курс" in attr_lower and "название" in attr_lower:
+                courses = ["Математика", "Физика", "Химия", "Биология", "История", "Литература"]
+                return random.choice(courses)
+            elif "имя" in attr_lower and "сотрудник" in attr_lower:
+                names = ["Иванов И.И.", "Петров П.П.", "Сидоров С.С.", "Козлов К.К.", "Новиков Н.Н."]
+                return random.choice(names)
+            elif "имя" in attr_lower and "студент" in attr_lower:
+                names = ["Алексеев А.", "Борисов Б.", "Васильев В.", "Григорьев Г.", "Дмитриев Д."]
+                return random.choice(names)
+            elif "имя" in attr_lower and "клиент" in attr_lower:
+                names = ["ООО Рога", "ЗАО Копыта", "ИП Хвостов", "ООО Перья", "ЗАО Крылья"]
+                return random.choice(names)
+            elif "начальник" in attr_lower or "куратор" in attr_lower:
+                managers = ["Петров П.П.", "Иванов И.И.", "Сидоров С.С.", "Козлов К.К.", "Новиков Н.Н."]
+                return random.choice(managers)
+            elif "преподаватель" in attr_lower:
+                teachers = ["Профессор Знаев", "Доцент Умнов", "Ассистент Мудров", "Лектор Ученый"]
+                return random.choice(teachers)
+            elif "товар" in attr_lower and "название" in attr_lower:
+                products = ["Товар_А", "Товар_Б", "Товар_В", "Товар_Г", "Товар_Д"]
+                return random.choice(products)
+            elif "категория" in attr_lower:
+                categories = ["Электроника", "Одежда", "Книги", "Спорт", "Дом"]
+                return random.choice(categories)
+            elif "город" in attr_lower:
+                cities = ["Москва", "СПб", "Казань", "Екатеринбург", "Новосибирск"]
+                return random.choice(cities)
+            elif "группа" in attr_lower:
+                groups = ["ИТ-101", "ИТ-102", "ИТ-201", "ИТ-202", "ИТ-301"]
+                return random.choice(groups)
+            else:
+                # Общий случай - очень ограниченный набор
+                values = [f"Значение_{i}" for i in range(1, 6)]
+                return random.choice(values)
+                
+        if dt == "DECIMAL":
+            # Стандартные значения для создания избыточности
+            if "бюджет" in attr.name.lower():
+                budgets = [50000.00, 100000.00, 150000.00, 200000.00, 250000.00]
+                return random.choice(budgets)
+            elif "цена" in attr.name.lower():
+                prices = [99.99, 199.99, 299.99, 499.99, 999.99]
+                return random.choice(prices)
+            else:
+                standard_values = [100.50, 250.00, 500.75, 1000.00, 1500.25]
+                return random.choice(standard_values)
+                
+        if dt == "DATE":
+            # Даты в очень узком диапазоне для создания дубликатов
+            base_dates = [
+                datetime.date(2023, 1, 15),
+                datetime.date(2023, 3, 20),
+                datetime.date(2023, 6, 10),
+                datetime.date(2023, 9, 5),
+                datetime.date(2023, 12, 1)
+            ]
+            return random.choice(base_dates)
+            
+        if dt == "BOOLEAN":
+            return random.choice([True, False])
+        
+        # По умолчанию для неключевых полей - очень ограниченный набор
+        return f"Общее_значение_{random.randint(1, 5)}"
+
+    # --- Генерация для КЛЮЧЕВЫХ полей ---
+    # Для ключевых полей нужна уникальность, но в разумных пределах
     if dt == "INTEGER":
-        return random.randint(1, 10_000)
+        # Увеличиваем диапазон для составных ключей
+        return random.randint(1, 500)
     if dt.startswith("VARCHAR"):
-        return rand_string(10)
+        return f"key_{random.randint(1, 500)}"
     if dt == "DECIMAL":
-        # Генерируем Decimal как строку, чтобы psycopg2 преобразовал
-        return round(random.uniform(0, 10_000), 2)
+        return round(random.uniform(1, 500), 2)
     if dt == "DATE":
-        return rand_date()
+        return rand_date(start_year=2020, end_year=2024)
     if dt == "BOOLEAN":
         return random.choice([True, False])
-    # По умолчанию — текст
-    return rand_string(10)
+
+    # По умолчанию для ключевых полей
+    return f"key_{random.randint(1, 500)}"
 
 
 def insert_random_data(conn, rel: Relation, num_rows: int):
@@ -150,20 +250,19 @@ def insert_random_data(conn, rel: Relation, num_rows: int):
     conn.commit()
 
 
-
-
 def create_and_populate_normalized(conn, orig_rel: Relation, normalized: List[Relation]):
     """
     Для каждого отношения из normalized:
-    1. Создать таблицу (без первичных ключей!)
+    1. Создать таблицу
     2. Заполнить из исходной таблицы: вставить DISTINCT строки по проекции атрибутов
+    3. Добавить индексы для производительности
     """
+    # Сначала создаем все таблицы
     for rel in normalized:
         # Удалим любую старую таблицу с таким именем
         drop_table_if_exists(conn, rel.name)
 
-        # Шаг 1: создать таблицу БЕЗ определения PRIMARY KEY и NOT NULL
-        # Просто перечисляем имена столбцов с типами
+        # Создаем таблицу с правильными типами данных
         columns_sql = []
         for attr in rel.attributes:
             col_def = f"{attr.name} {sql_type_for(attr)}"
@@ -174,23 +273,59 @@ def create_and_populate_normalized(conn, orig_rel: Relation, normalized: List[Re
             cur.execute(create_sql)
         conn.commit()
 
-        # Шаг 2: заполнить проекцией SELECT DISTINCT
+    # Теперь заполняем таблицы
+    for rel in normalized:
+        # Получаем список атрибутов для этой таблицы
         attrs = [attr.name for attr in rel.attributes]
         col_list = ", ".join(attrs)
-        insert_sql = f"""
-            INSERT INTO {rel.name} ({col_list})
-            SELECT DISTINCT {col_list} FROM {orig_rel.name};
-        """
-        # Логируем SQL‐запрос проекции перед выполнением
-        print(f"[SQL-PROJECT] {insert_sql.strip()}")
+        
+        # Заполняем таблицу уникальными комбинациями
         with conn.cursor() as cur:
-            cur.execute(insert_sql)
+            # Проверяем, существуют ли все столбцы в исходной таблице
+            cur.execute(f"""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = '{orig_rel.name.lower()}'
+            """)
+            existing_columns = {row[0].lower() for row in cur.fetchall()}
+            
+            # Фильтруем только существующие столбцы
+            valid_attrs = []
+            for attr in attrs:
+                if attr.lower() in existing_columns:
+                    valid_attrs.append(attr)
+                else:
+                    print(f"[WARNING] Столбец {attr} не найден в таблице {orig_rel.name}")
+            
+            if valid_attrs:
+                valid_col_list = ", ".join(valid_attrs)
+                insert_sql = f"""
+                    INSERT INTO {rel.name} ({valid_col_list})
+                    SELECT DISTINCT {valid_col_list} FROM {orig_rel.name}
+                """
+                print(f"[SQL-PROJECT] {insert_sql.strip()}")
+                cur.execute(insert_sql)
+            else:
+                print(f"[ERROR] Нет валидных столбцов для таблицы {rel.name}")
+        
         conn.commit()
-
+        
         # Отчёт о количестве строк
         cnt = count_rows(conn, rel.name)
         print(f"[INFO] В таблице {rel.name} после проекции {cnt} строк")
-
+        
+        # Добавляем индексы для производительности (но не первичные ключи)
+        with conn.cursor() as cur:
+            for attr in rel.attributes:
+                if attr.name.lower() in [col.lower() for col in valid_attrs]:
+                    try:
+                        index_name = f"idx_{rel.name}_{attr.name}"
+                        cur.execute(f"CREATE INDEX {index_name} ON {rel.name} ({attr.name})")
+                        print(f"[INFO] Создан индекс {index_name}")
+                    except Exception as e:
+                        # Индекс уже существует или другая ошибка - не критично
+                        pass
+        conn.commit()
 
 
 def count_rows(conn, table_name: str) -> int:

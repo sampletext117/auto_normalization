@@ -103,7 +103,7 @@ class Decomposer:
     @staticmethod
     def decompose_to_3nf(relation: Relation) -> NormalizationResult:
         """
-        Декомпозиция отношения в третью нормальную форму
+        Декомпозиция отношения в третью нормальную форму.
         Использует алгоритм синтеза
         """
         analyzer = NormalFormAnalyzer(relation)

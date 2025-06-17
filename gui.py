@@ -1176,7 +1176,7 @@ class NormalizationGUI:
 
         progress_window.after(100, check_completion)
 
-    def show_memory_test_results(self, results: Dict[str, Dict[str, Dict[str, int]]]):
+    def show_memory_test_results(self, results: Dict[str, Dict[str, int]]):
         """Показать результаты теста памяти в отдельном окне"""
         result_window = tk.Toplevel(self.root)
         result_window.title("Результаты теста памяти")
@@ -1188,6 +1188,8 @@ class NormalizationGUI:
 
         text_widget = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, font=("Courier", 9))
         text_widget.pack(fill='both', expand=True)
+        text_widget.bind("<Control-c>", lambda e: None)
+        text_widget.bind("<Control-a>", lambda e: text_widget.tag_add("sel", "1.0", "end"))
 
         # Формируем отчет
         report = "РЕЗУЛЬТАТЫ ТЕСТА ИСПОЛЬЗОВАНИЯ ПАМЯТИ\n"
@@ -1196,67 +1198,56 @@ class NormalizationGUI:
         # Сводная таблица
         report += "Сводная таблица размеров (в КБ):\n"
         report += "-" * 70 + "\n"
-        report += f"{'Уровень':<10} | {'Без индексов':>15} | {'С индексами':>15} | {'Индексы':>12} | {'Изменение':>10}\n"
+        report += f"{'Уровень':<10} | {'Общий размер':>15} | {'Данные':>12} | {'Индексы':>12} | {'Изменение':>10}\n"
         report += "-" * 70 + "\n"
 
-        original_size = results.get("Original", {}).get("with_indexes", {}).get("total_size", 1)
+        original_size = results.get("Original", {}).get("total_size", 1)
 
         for level in ["Original", "2NF", "3NF", "BCNF", "4NF"]:
             if level in results:
-                size_no_idx = results[level]["without_indexes"]["total_size"] / 1024
-                size_with_idx = results[level]["with_indexes"]["total_size"] / 1024
-                idx_size = results[level]["with_indexes"]["indexes_size"] / 1024
+                level_data = results[level]
+                total_size_kb = level_data["total_size"] / 1024
+                table_size_kb = level_data["table_size"] / 1024
+                indexes_size_kb = level_data["indexes_size"] / 1024
 
                 if level == "Original":
-                    change = "базовый"
+                    change_str = "базовый"
                 else:
-                    change_pct = ((size_with_idx * 1024 - original_size) / original_size) * 100
-                    change = f"{change_pct:+.1f}%"
+                    change_pct = ((level_data[
+                                       "total_size"] - original_size) / original_size) * 100 if original_size > 0 else 0
+                    change_str = f"{change_pct:+.1f}%"
 
-                report += f"{level:<10} | {size_no_idx:>15.2f} | {size_with_idx:>15.2f} | {idx_size:>12.2f} | {change:>10}\n"
+                report += f"{level:<10} | {total_size_kb:>15.2f} | {table_size_kb:>12.2f} | {indexes_size_kb:>12.2f} | {change_str:>10}\n"
 
         report += "-" * 70 + "\n\n"
 
         # Детальная информация
-        report += "Детальная информация:\n"
+        report += "Детальная информация по уровням нормализации:\n"
         report += "=" * 70 + "\n\n"
 
-        for level, level_data in results.items():
+        for level, data in results.items():
             report += f"{level}:\n"
-            report += "-" * 30 + "\n"
-
-            without_idx = level_data["without_indexes"]
-            with_idx = level_data["with_indexes"]
-
-            report += f"  Без индексов:\n"
-            report += f"    - Размер таблиц: {without_idx['table_size'] / 1024:.2f} КБ\n"
-            report += f"    - Общий размер: {without_idx['total_size'] / 1024:.2f} КБ\n"
-            report += f"    - Количество строк: {without_idx['row_count']}\n"
-
-            report += f"  С индексами:\n"
-            report += f"    - Размер таблиц: {with_idx['table_size'] / 1024:.2f} КБ\n"
-            report += f"    - Размер индексов: {with_idx['indexes_size'] / 1024:.2f} КБ\n"
-            report += f"    - Общий размер: {with_idx['total_size'] / 1024:.2f} КБ\n"
-
-            # Эффективность хранения
-            if without_idx['row_count'] > 0:
-                bytes_per_row = with_idx['total_size'] / without_idx['row_count']
-                report += f"    - Байт на строку: {bytes_per_row:.2f}\n"
-
-            report += "\n"
+            report += f"  - Общий размер: {data['total_size'] / 1024:.2f} КБ\n"
+            report += f"    - Данные: {data['table_size'] / 1024:.2f} КБ\n"
+            report += f"    - Индексы: {data['indexes_size'] / 1024:.2f} КБ\n"
+            report += f"  - Общее количество строк: {data['row_count']}\n"
+            report += f"  - Количество таблиц: {data['table_count']}\n\n"
 
         # Выводы
         report += "ВЫВОДЫ:\n"
         report += "=" * 70 + "\n"
 
-        # Находим самый экономный уровень
+        # Находим самый экономный и самый затратный уровень
         min_size = float('inf')
         min_level = ""
         max_size = 0
         max_level = ""
 
-        for level, level_data in results.items():
-            size = level_data["with_indexes"]["total_size"]
+        # Сортируем результаты для корректного сравнения
+        sorted_levels = [lvl for lvl in ["Original", "2NF", "3NF", "BCNF", "4NF"] if lvl in results]
+
+        for level in sorted_levels:
+            size = results[level]["total_size"]
             if size < min_size:
                 min_size = size
                 min_level = level
@@ -1264,11 +1255,16 @@ class NormalizationGUI:
                 max_size = size
                 max_level = level
 
-        if min_level and max_level:
+        if min_level and max_level and max_size > 0:
             saving_pct = ((max_size - min_size) / max_size) * 100
             report += f"- Наиболее экономный уровень: {min_level} ({min_size / 1024:.2f} КБ)\n"
             report += f"- Наиболее затратный уровень: {max_level} ({max_size / 1024:.2f} КБ)\n"
-            report += f"- Потенциальная экономия: {saving_pct:.1f}%\n"
+            report += f"- Потенциальная экономия дискового пространства: {saving_pct:.1f}%\n"
+
+        report += "- Нормализация увеличивает количество таблиц и сложность JOIN-запросов, но может\n"
+        report += "  существенно сократить занимаемое место за счет устранения избыточности данных.\n"
+        report += "- Оптимальный уровень нормализации зависит от баланса между скоростью запросов\n"
+        report += "  (меньше JOIN'ов) и экономией места на диске."
 
         # Вставляем отчет в текстовое поле
         text_widget.insert('1.0', report)
