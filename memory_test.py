@@ -1,11 +1,51 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ТЕСТ ПАМЯТИ С ВЫСОКОЙ ИЗБЫТОЧНОСТЬЮ
+
+Этот модуль предоставляет инструменты для тестирования эффективности нормализации
+базы данных с использованием данных с высокой избыточностью.
+
+ОСНОВНЫЕ ВОЗМОЖНОСТИ:
+1. create_highly_redundant_data() - создает данные с контролируемой высокой избыточностью
+2. run_memory_test() - выполняет полный цикл тестирования памяти с нормализацией
+3. plot_memory_usage() - строит графики для черно-белой печати
+4. main() - интерактивный интерфейс для запуска тестов
+
+ОСОБЕННОСТИ ГЕНЕРАЦИИ ДАННЫХ:
+- Автоматическое определение типа поля по имени атрибута
+- Предопределенные наборы значений для максимальной избыточности
+- Поддержка различных предметных областей (сотрудники, студенты, заказы и т.д.)
+- Обеспечение уникальности первичных ключей
+- Вычисление коэффициента избыточности
+
+ПРИМЕР ИСПОЛЬЗОВАНИЯ:
+    python memory_test.py
+    
+    # Или программно:
+    from memory_test import run_memory_test
+    results = run_memory_test(my_relation, 10000)
+    plot_memory_usage(results)
+
+КОЭФФИЦИЕНТ ИЗБЫТОЧНОСТИ:
+- < 10x: Низкая избыточность
+- 10-50x: Умеренная избыточность  
+- 50-200x: Высокая избыточность
+- > 200x: Очень высокая избыточность (идеально для демонстрации)
+
+АВТОР: Система автоматической нормализации БД
+ДАТА: 2024
+"""
+
 import psycopg2
 from typing import Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
+import random
 
-from models import Relation, NormalForm
+from models import Relation, NormalForm, Attribute, FunctionalDependency
 from data_test import connect, drop_table_if_exists, create_table, insert_random_data, create_and_populate_normalized, \
-    count_rows
+    count_rows, sql_type_for
 from decomposition import Decomposer
 from analyzer import NormalFormAnalyzer
 
@@ -85,32 +125,266 @@ def create_realistic_indexes(conn, relation: Relation):
     conn.commit()
 
 
+def create_highly_redundant_data(conn, rel: Relation, num_rows: int) -> float:
+    """
+    Создает данные с высокой избыточностью для любого отношения.
+    Возвращает коэффициент избыточности.
+    """
+    print(f"[INFO] Создание {num_rows} строк с высокой избыточностью...")
+    print(f"[CREATE_DATA] Отношение: {rel.name}, атрибуты: {[attr.name for attr in rel.attributes]}")
+    
+    # Создаем таблицу
+    print(f"[CREATE_DATA] Удаление существующей таблицы {rel.name}...")
+    drop_table_if_exists(conn, rel.name)
+    columns_def = []
+    for attr in rel.attributes:
+        col_def = f"{attr.name} {sql_type_for(attr)}"
+        if attr.is_primary_key:
+            col_def += " NOT NULL"
+        columns_def.append(col_def)
+
+    # Добавляем первичный ключ
+    pk_attrs = [attr.name for attr in rel.attributes if attr.is_primary_key]
+    pk_clause = ""
+    if pk_attrs:
+        pk_list = ", ".join(pk_attrs)
+        pk_clause = f", PRIMARY KEY ({pk_list})"
+
+    ddl = f"CREATE TABLE {rel.name} (\n    " + ",\n    ".join(columns_def) + pk_clause + "\n);"
+    
+    print(f"[CREATE_DATA] Создание таблицы {rel.name}...")
+    print(f"[CREATE_DATA] DDL: {ddl}")
+    with conn.cursor() as cur:
+        cur.execute(ddl)
+    conn.commit()
+    print(f"[CREATE_DATA] Таблица {rel.name} создана")
+    
+    # Предопределенные наборы значений для высокой избыточности
+    departments = ["ИТ", "Финансы", "HR", "Маркетинг", "Продажи"]
+    projects = ["Проект_А", "Проект_Б", "Проект_В", "Проект_Г", "Проект_Д"]
+    managers = ["Петров И.И.", "Иванов А.А.", "Сидорова М.М.", "Козлов К.К.", "Новиков Н.Н."]
+    employee_names = [
+        "Александров А.А.", "Борисов Б.Б.", "Васильев В.В.", "Григорьев Г.Г.",
+        "Дмитриев Д.Д.", "Егоров Е.Е.", "Жуков Ж.Ж.", "Зайцев З.З."
+    ]
+    student_names = [
+        "Алексеев А.", "Борисов Б.", "Васильев В.", "Григорьев Г.",
+        "Дмитриев Д.", "Егоров Е.", "Жуков Ж.", "Зайцев З."
+    ]
+    courses = ["Математика", "Физика", "Химия", "Биология", "История", "Литература"]
+    teachers = ["Профессор Знаев", "Доцент Умнов", "Ассистент Мудров", "Лектор Ученый"]
+    clients = ["ООО Рога", "ЗАО Копыта", "ИП Хвостов", "ООО Перья", "ЗАО Крылья"]
+    products = ["Товар_А", "Товар_Б", "Товар_В", "Товар_Г", "Товар_Д"]
+    categories = ["Электроника", "Одежда", "Книги", "Спорт", "Дом"]
+    cities = ["Москва", "СПб", "Казань", "Екатеринбург", "Новосибирск"]
+    groups = ["ИТ-101", "ИТ-102", "ИТ-201", "ИТ-202", "ИТ-301"]
+    
+    # Стандартные значения для числовых полей
+    budgets = [50000.00, 100000.00, 150000.00, 200000.00, 250000.00]
+    prices = [99.99, 199.99, 299.99, 499.99, 999.99]
+    grades = [2, 3, 4, 5]
+    quantities = [1, 2, 3, 5, 10]
+    
+    # Функция для генерации значения с высокой избыточностью
+    def generate_redundant_value(attr: Attribute, row_id: int):
+        dt = attr.data_type.upper()
+        attr_lower = attr.name.lower()
+        
+        # Для первичных ключей обеспечиваем уникальность
+        if attr.is_primary_key:
+            if dt == "INTEGER":
+                return row_id
+            elif dt.startswith("VARCHAR"):
+                return f"key_{row_id}"
+            else:
+                return row_id
+        
+        # Для неключевых полей создаем избыточность на основе имени атрибута
+        if dt == "INTEGER":
+            if any(word in attr_lower for word in ["отдел", "департамент"]):
+                return random.randint(1, len(departments))
+            elif any(word in attr_lower for word in ["проект", "курс"]):
+                return random.randint(1, len(projects if "проект" in attr_lower else courses))
+            elif any(word in attr_lower for word in ["клиент", "заказчик"]):
+                return random.randint(1, len(clients))
+            elif any(word in attr_lower for word in ["товар", "продукт"]):
+                return random.randint(1, len(products))
+            elif any(word in attr_lower for word in ["оценка", "балл"]):
+                return random.choice(grades)
+            elif any(word in attr_lower for word in ["количество", "кол"]):
+                return random.choice(quantities)
+            else:
+                return random.randint(1, 8)
+                
+        elif dt.startswith("VARCHAR"):
+            if any(word in attr_lower for word in ["отдел", "департамент"]):
+                return random.choice(departments)
+            elif "проект" in attr_lower and any(word in attr_lower for word in ["название", "наименование"]):
+                return random.choice(projects)
+            elif "курс" in attr_lower and any(word in attr_lower for word in ["название", "наименование"]):
+                return random.choice(courses)
+            elif any(word in attr_lower for word in ["имя", "фио"]) and any(word in attr_lower for word in ["сотрудник", "работник"]):
+                return random.choice(employee_names)
+            elif any(word in attr_lower for word in ["имя", "фио"]) and any(word in attr_lower for word in ["студент", "учащийся"]):
+                return random.choice(student_names)
+            elif any(word in attr_lower for word in ["имя", "название"]) and any(word in attr_lower for word in ["клиент", "заказчик"]):
+                return random.choice(clients)
+            elif any(word in attr_lower for word in ["начальник", "руководитель", "менеджер", "куратор"]):
+                return random.choice(managers)
+            elif any(word in attr_lower for word in ["преподаватель", "учитель", "лектор"]):
+                return random.choice(teachers)
+            elif any(word in attr_lower for word in ["товар", "продукт"]) and any(word in attr_lower for word in ["название", "наименование"]):
+                return random.choice(products)
+            elif any(word in attr_lower for word in ["категория", "тип"]):
+                return random.choice(categories)
+            elif any(word in attr_lower for word in ["город", "населенный"]):
+                return random.choice(cities)
+            elif any(word in attr_lower for word in ["группа", "класс"]):
+                return random.choice(groups)
+            else:
+                # Общий случай - ограниченный набор значений
+                return f"Значение_{random.randint(1, 6)}"
+                
+        elif dt == "DECIMAL":
+            if any(word in attr_lower for word in ["бюджет", "стоимость"]):
+                return random.choice(budgets)
+            elif any(word in attr_lower for word in ["цена", "стоимость"]):
+                return random.choice(prices)
+            else:
+                return random.choice([100.50, 250.00, 500.75, 1000.00, 1500.25])
+                
+        elif dt == "DATE":
+            import datetime
+            base_dates = [
+                datetime.date(2023, 1, 15),
+                datetime.date(2023, 3, 20),
+                datetime.date(2023, 6, 10),
+                datetime.date(2023, 9, 5),
+                datetime.date(2023, 12, 1)
+            ]
+            return random.choice(base_dates)
+            
+        elif dt == "BOOLEAN":
+            return random.choice([True, False])
+        
+        # По умолчанию
+        return f"Общее_значение_{random.randint(1, 5)}"
+    
+    # Генерируем данные с обеспечением уникальности первичных ключей
+    cols = [attr.name for attr in rel.attributes]
+    col_list = ", ".join(cols)
+    placeholders = ", ".join(["%s"] * len(cols))
+    insert_sql = f"INSERT INTO {rel.name} ({col_list}) VALUES ({placeholders});"
+    
+    pk_attrs = [attr for attr in rel.attributes if attr.is_primary_key]
+    used_pk_values = set()
+    
+    print(f"[CREATE_DATA] Начало вставки данных...")
+    with conn.cursor() as cur:
+        inserted_rows = 0
+        attempts = 0
+        max_attempts = num_rows * 3  # Ограничиваем количество попыток
+        
+        while inserted_rows < num_rows and attempts < max_attempts:
+            attempts += 1
+            
+            # Генерируем значения для всех атрибутов
+            values = []
+            for attr in rel.attributes:
+                value = generate_redundant_value(attr, inserted_rows + 1)
+                values.append(value)
+            
+            # Проверяем уникальность первичного ключа
+            if pk_attrs:
+                pk_indices = [rel.attributes.index(pk_attr) for pk_attr in pk_attrs]
+                pk_tuple = tuple(values[i] for i in pk_indices)
+                
+                if pk_tuple in used_pk_values:
+                    continue  # Пропускаем дубликат
+                    
+                used_pk_values.add(pk_tuple)
+            
+            cur.execute(insert_sql, values)
+            inserted_rows += 1
+            
+            # Логируем прогресс
+            if inserted_rows % 1000 == 0 or inserted_rows == num_rows:
+                print(f"[CREATE_DATA] Вставлено {inserted_rows}/{num_rows} строк...")
+    
+    conn.commit()
+    print(f"[INFO] Создано {inserted_rows} строк")
+    print(f"[CREATE_DATA] Всего попыток: {attempts}, успешных вставок: {inserted_rows}")
+    
+    # Вычисляем статистику избыточности
+    total_redundancy = 0
+    redundancy_count = 0
+    
+    with conn.cursor() as cur:
+        non_pk_attrs = [attr for attr in rel.attributes if not attr.is_primary_key]
+        
+        for attr in non_pk_attrs:
+            cur.execute(f'SELECT COUNT(DISTINCT "{attr.name}") FROM {rel.name}')
+            unique_count = cur.fetchone()[0]
+            if unique_count > 0:
+                field_redundancy = inserted_rows / unique_count
+                total_redundancy += field_redundancy
+                redundancy_count += 1
+            print(f"  • Уникальных значений в {attr.name}: {unique_count}")
+    
+    # Средний коэффициент избыточности
+    if redundancy_count > 0:
+        redundancy_coeff = total_redundancy / redundancy_count
+    else:
+        redundancy_coeff = 1.0
+    
+    print(f"  • Средний коэффициент избыточности: {redundancy_coeff:.1f}x")
+    return redundancy_coeff
+
+
 def run_memory_test(
         orig_rel: Relation,
         num_rows: int = 10000
 ) -> Dict[str, Dict[str, any]]:
     """
-    Тестирование использования памяти.
+    Тестирование использования памяти с высокой избыточностью.
     """
-    conn = connect()
+    print(f"[MEMORY_TEST] Начало функции run_memory_test с {num_rows} строками")
+    
+    try:
+        conn = connect()
+        print(f"[MEMORY_TEST] Подключение к БД успешно")
+    except Exception as e:
+        print(f"[MEMORY_TEST] ОШИБКА подключения к БД: {e}")
+        raise
+    
     results: Dict[str, Dict[str, any]] = {}
 
     try:
-        print(f"\n{'=' * 50}\n[INFO] Начало теста памяти с {num_rows} строками...\n{'=' * 50}")
+        print(f"\n{'=' * 50}")
+        print(f"[INFO] Начало теста памяти с {num_rows} строками (высокая избыточность)...")
+        print(f"{'=' * 50}")
 
-        # 1. ИСХОДНОЕ ОТНОШЕНИЕ
+        # 1. ИСХОДНОЕ ОТНОШЕНИЕ С ВЫСОКОЙ ИЗБЫТОЧНОСТЬЮ
         print("\n--- Уровень: Original ---")
-        drop_table_if_exists(conn, orig_rel.name)
-        create_table(conn, orig_rel)
-        insert_random_data(conn, orig_rel, num_rows)
+        print(f"[MEMORY_TEST] Создание данных с высокой избыточностью...")
+        
+        redundancy_coeff = create_highly_redundant_data(conn, orig_rel, num_rows)
+        print(f"[MEMORY_TEST] Данные созданы, коэффициент избыточности: {redundancy_coeff:.1f}x")
+        
+        print(f"[MEMORY_TEST] Создание индексов...")
         create_realistic_indexes(conn, orig_rel)  # Создаем индексы и PK
+        print(f"[MEMORY_TEST] Индексы созданы")
 
+        print(f"[MEMORY_TEST] Получение информации о размере таблицы...")
         results["Original"] = get_table_size_info(conn, orig_rel.name)
         results["Original"]["table_count"] = 1
+        results["Original"]["redundancy_coeff"] = redundancy_coeff
         print(f"  Размер: {results['Original']['total_size'] / 1024:.2f} KB | "
-              f"Строк: {results['Original']['row_count']}")
+              f"Строк: {results['Original']['row_count']} | "
+              f"Избыточность: {redundancy_coeff:.1f}x")
 
         # 2. ОПРЕДЕЛЕНИЕ НОРМАЛЬНОЙ ФОРМЫ
+        print(f"[MEMORY_TEST] Анализ нормальной формы...")
         analyzer = NormalFormAnalyzer(orig_rel)
         current_nf, _ = analyzer.determine_normal_form()
         print(f"\n[INFO] Исходная нормальная форма: {current_nf.value}")
@@ -125,14 +399,35 @@ def run_memory_test(
 
         for target_nf, level_name, decompose_func in nf_order:
             if target_nf.value <= current_nf.value:
+                print(f"[MEMORY_TEST] Пропускаем {level_name} (уже в более высокой НФ)")
                 continue
 
             print(f"\n--- Уровень: {level_name} ---")
-            decomp_result = decompose_func(orig_rel)
-            decomposed_rels = decomp_result.decomposed_relations
+            print(f"[MEMORY_TEST] Выполнение декомпозиции в {level_name}...")
+            
+            try:
+                decomp_result = decompose_func(orig_rel)
+                decomposed_rels = decomp_result.decomposed_relations
+                print(f"[MEMORY_TEST] Декомпозиция в {level_name} завершена")
+            except Exception as e:
+                print(f"[MEMORY_TEST] ОШИБКА декомпозиции в {level_name}: {e}")
+                continue
+            
+            print(f"  [DEBUG] Декомпозиция дала {len(decomposed_rels)} отношений:")
+            for i, rel in enumerate(decomposed_rels):
+                attrs_str = [attr.name for attr in rel.attributes]
+                print(f"    {i+1}. {rel.name}: {attrs_str}")
 
             # Создаем и заполняем таблицы
-            create_and_populate_normalized(conn, orig_rel, decomposed_rels)
+            print(f"[MEMORY_TEST] Создание и заполнение нормализованных таблиц для {level_name}...")
+            try:
+                create_and_populate_normalized(conn, orig_rel, decomposed_rels)
+                print(f"[MEMORY_TEST] Таблицы для {level_name} созданы и заполнены")
+            except Exception as e:
+                print(f"  [WARNING] Ошибка при создании нормализованных таблиц: {e}")
+                print(f"[MEMORY_TEST] Пропускаем уровень {level_name} из-за ошибки")
+                # Если не удалось создать нормализованные таблицы, пропускаем этот уровень
+                continue
 
             level_total_size = 0
             level_table_size = 0
@@ -140,9 +435,12 @@ def run_memory_test(
             level_row_count = 0
 
             # Создаем индексы для всех таблиц
-            for rel in decomposed_rels:
+            print(f"[MEMORY_TEST] Создание индексов для {len(decomposed_rels)} таблиц...")
+            for i, rel in enumerate(decomposed_rels):
+                print(f"[MEMORY_TEST] Создание индексов для таблицы {i+1}/{len(decomposed_rels)}: {rel.name}")
                 create_realistic_indexes(conn, rel)
                 size_info = get_table_size_info(conn, rel.name)
+                print(f"[MEMORY_TEST] Размер таблицы {rel.name}: {size_info['total_size'] / 1024:.2f} KB, строк: {size_info['row_count']}")
 
                 level_total_size += size_info['total_size']
                 level_table_size += size_info['table_size']
@@ -202,14 +500,19 @@ def run_memory_test(
             print(f"  Размер: {results[level_name]['total_size'] / 1024:.2f} KB | "
                   f"Строк: {results[level_name]['row_count']} | "
                   f"Таблиц: {results[level_name]['table_count']}")
+            print(f"[MEMORY_TEST] Уровень {level_name} завершен успешно")
+
+        print(f"\n[MEMORY_TEST] Тест памяти завершен. Обработано уровней: {len(results)}")
 
     except Exception as e:
         print(f"[ERROR] Ошибка в тесте памяти: {e}")
         import traceback
         traceback.print_exc()
     finally:
+        print(f"[MEMORY_TEST] Закрытие соединения с БД")
         conn.close()
 
+    print(f"[MEMORY_TEST] Возвращаем результаты: {list(results.keys())}")
     return results
 
 
@@ -219,7 +522,7 @@ def plot_memory_usage(results: Dict[str, Dict[str, any]]):
     """
     levels = [level for level in ["Original", "2NF", "3NF", "BCNF", "4NF"] if level in results]
     if not levels:
-        print("❌ Нет данных для построения графиков.")
+        print("[ОШИБКА] Нет данных для построения графиков.")
         return
 
     # Подготовка данных (в мегабайтах для наглядности)
@@ -235,7 +538,7 @@ def plot_memory_usage(results: Dict[str, Dict[str, any]]):
 
     # Создание фигуры
     fig = plt.figure(figsize=(16, 12))
-    fig.suptitle('АНАЛИЗ ЭФФЕКТИВНОСТИ НОРМАЛИЗАЦИИ БАЗЫ ДАННЫХ', 
+    fig.suptitle('АНАЛИЗ ЭФФЕКТИВНОСТИ НОРМАЛИЗАЦИИ БАЗЫ ДАННЫХ (ВЫСОКАЯ ИЗБЫТОЧНОСТЬ)', 
                  fontsize=18, fontweight='bold', y=0.98)
 
     # --- График 1: Составной график размеров ---
@@ -438,15 +741,106 @@ def plot_memory_usage(results: Dict[str, Dict[str, any]]):
     plt.show()
     
     # Выводим текстовую сводку
-    print(f"\n📋 ТЕКСТОВАЯ СВОДКА:")
+    print(f"\nТЕКСТОВАЯ СВОДКА:")
     print(f"   • Исходный размер: {original_size_mb:.2f} МБ")
     print(f"   • Финальный размер: {final_size_mb:.2f} МБ")
     print(f"   • Экономия памяти: {total_savings:.1f}%")
     print(f"   • Количество таблиц: {table_counts[0]} → {table_counts[-1]}")
     print(f"   • Количество строк: {original_rows:,} → {row_counts[-1]:,}")
     
+    # Показываем избыточность если доступна
+    if "Original" in results and "redundancy_coeff" in results["Original"]:
+        redundancy = results["Original"]["redundancy_coeff"]
+        print(f"   • Коэффициент избыточности: {redundancy:.1f}x")
+    
     if total_savings > 0:
-        print(f"   ✅ Нормализация ЭФФЕКТИВНА - экономия {total_savings:.1f}% памяти")
+        print(f"   [УСПЕХ] Нормализация ЭФФЕКТИВНА - экономия {total_savings:.1f}% памяти")
     else:
-        print(f"   ⚠️  Нормализация увеличила размер на {abs(total_savings):.1f}%")
-        print(f"       (возможно, нужно больше избыточных данных для демонстрации эффекта)")
+        print(f"   [ВНИМАНИЕ] Нормализация увеличила размер на {abs(total_savings):.1f}%")
+        if "Original" in results and "redundancy_coeff" in results["Original"]:
+            redundancy = results["Original"]["redundancy_coeff"]
+            if redundancy < 10:
+                print(f"       [СОВЕТ] Низкая избыточность ({redundancy:.1f}x) - увеличьте количество строк или уменьшите разнообразие значений")
+            else:
+                print(f"       [ПРОБЛЕМА] Высокая избыточность ({redundancy:.1f}x), но нормализация все равно увеличила размер")
+
+
+def main():
+    """
+    Главная функция для запуска тестов памяти с высокой избыточностью.
+    """
+    print("=" * 60)
+    print("ТЕСТ ПАМЯТИ С ВЫСОКОЙ ИЗБЫТОЧНОСТЬЮ")
+    print("=" * 60)
+    print("Этот тест создает данные с высокой избыточностью для")
+    print("демонстрации эффективности нормализации базы данных.")
+    print("=" * 60)
+    
+    # Пример отношения "Сотрудники-Проекты" с высокой избыточностью
+    from models import Attribute
+    
+    employees_projects = Relation(
+        name="СотрудникиПроекты",
+        attributes=[
+            Attribute("КодСотрудника", "INTEGER", is_primary_key=True),
+            Attribute("ИмяСотрудника", "VARCHAR(100)"),
+            Attribute("Отдел", "VARCHAR(50)"),
+            Attribute("НачальникОтдела", "VARCHAR(100)"),
+            Attribute("КодПроекта", "INTEGER"),
+            Attribute("НазваниеПроекта", "VARCHAR(100)"),
+            Attribute("Бюджет", "DECIMAL(10,2)")
+        ]
+    )
+    
+    # Добавляем функциональные зависимости для корректной нормализации
+    employees_projects.functional_dependencies = [
+        FunctionalDependency(
+            determinant=frozenset([employees_projects.get_attribute_by_name("КодСотрудника")]),
+            dependent=frozenset([
+                employees_projects.get_attribute_by_name("ИмяСотрудника"),
+                employees_projects.get_attribute_by_name("Отдел"),
+                employees_projects.get_attribute_by_name("НачальникОтдела")
+            ])
+        ),
+        FunctionalDependency(
+            determinant=frozenset([employees_projects.get_attribute_by_name("КодПроекта")]),
+            dependent=frozenset([
+                employees_projects.get_attribute_by_name("НазваниеПроекта"),
+                employees_projects.get_attribute_by_name("Бюджет")
+            ])
+        ),
+        FunctionalDependency(
+            determinant=frozenset([employees_projects.get_attribute_by_name("Отдел")]),
+            dependent=frozenset([employees_projects.get_attribute_by_name("НачальникОтдела")])
+        )
+    ]
+    
+    print(f"\nИспользуемое отношение: {employees_projects.name}")
+    print(f"Атрибуты: {[attr.name for attr in employees_projects.attributes]}")
+    print(f"Функциональные зависимости: {len(employees_projects.functional_dependencies)}")
+    
+    # Запрашиваем количество строк
+    while True:
+        try:
+            num_rows = int(input(f"\nВведите количество строк для теста (рекомендуется 5000-20000): "))
+            if num_rows > 0:
+                break
+            else:
+                print("Количество строк должно быть положительным числом.")
+        except ValueError:
+            print("Пожалуйста, введите корректное число.")
+    
+    # Запускаем тест
+    print(f"\nЗапуск теста с {num_rows} строками...")
+    results = run_memory_test(employees_projects, num_rows)
+    
+    if results:
+        print(f"\nПостроение графиков...")
+        plot_memory_usage(results)
+    else:
+        print("[ОШИБКА] Не удалось получить результаты теста.")
+
+
+if __name__ == "__main__":
+    from models import FunctionalDependency
+    main()

@@ -20,7 +20,7 @@ class FDAlgorithms:
         Returns:
             Замыкание множества атрибутов
         """
-        closure = attributes.copy()
+        closure = set(attributes)  # Преобразуем в set, если пришел frozenset
         changed = True
 
         while changed:

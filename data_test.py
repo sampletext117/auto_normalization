@@ -282,26 +282,30 @@ def create_and_populate_normalized(conn, orig_rel: Relation, normalized: List[Re
         # Заполняем таблицу уникальными комбинациями
         with conn.cursor() as cur:
             # Проверяем, существуют ли все столбцы в исходной таблице
+            # Пробуем найти таблицу сначала с оригинальным именем, потом с нижним регистром
             cur.execute(f"""
                 SELECT column_name 
                 FROM information_schema.columns 
-                WHERE table_name = '{orig_rel.name.lower()}'
+                WHERE table_name = '{orig_rel.name}'
+                   OR table_name = '{orig_rel.name.lower()}'
             """)
-            existing_columns = {row[0].lower() for row in cur.fetchall()}
+            existing_columns = {row[0] for row in cur.fetchall()}  # Сохраняем оригинальный регистр
             
             # Фильтруем только существующие столбцы
             valid_attrs = []
             for attr in attrs:
-                if attr.lower() in existing_columns:
+                if attr in existing_columns:
                     valid_attrs.append(attr)
                 else:
                     print(f"[WARNING] Столбец {attr} не найден в таблице {orig_rel.name}")
+                    print(f"[DEBUG] Доступные столбцы: {list(existing_columns)}")
             
             if valid_attrs:
-                valid_col_list = ", ".join(valid_attrs)
+                # Используем кавычки для имен столбцов и таблиц для корректной работы с кириллицей
+                valid_col_list = ", ".join([f'"{attr}"' for attr in valid_attrs])
                 insert_sql = f"""
                     INSERT INTO {rel.name} ({valid_col_list})
-                    SELECT DISTINCT {valid_col_list} FROM {orig_rel.name}
+                    SELECT DISTINCT {valid_col_list} FROM "{orig_rel.name}"
                 """
                 print(f"[SQL-PROJECT] {insert_sql.strip()}")
                 cur.execute(insert_sql)
@@ -317,10 +321,10 @@ def create_and_populate_normalized(conn, orig_rel: Relation, normalized: List[Re
         # Добавляем индексы для производительности (но не первичные ключи)
         with conn.cursor() as cur:
             for attr in rel.attributes:
-                if attr.name.lower() in [col.lower() for col in valid_attrs]:
+                if attr.name in valid_attrs:
                     try:
                         index_name = f"idx_{rel.name}_{attr.name}"
-                        cur.execute(f"CREATE INDEX {index_name} ON {rel.name} ({attr.name})")
+                        cur.execute(f'CREATE INDEX {index_name} ON {rel.name} ("{attr.name}")')
                         print(f"[INFO] Создан индекс {index_name}")
                     except Exception as e:
                         # Индекс уже существует или другая ошибка - не критично

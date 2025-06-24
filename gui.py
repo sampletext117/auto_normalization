@@ -1066,11 +1066,7 @@ class NormalizationGUI:
 
 
     def run_memory_test_gui(self):
-        """Запустить тест использования памяти"""
-        if not self.normalization_result:
-            messagebox.showwarning("Ошибка", "Сначала выполните нормализацию.")
-            return
-
+        """Запустить тест использования памяти через внешний скрипт"""
         # Считываем количество строк
         try:
             num_rows = int(self.test_rows_var.get())
@@ -1080,17 +1076,20 @@ class NormalizationGUI:
             messagebox.showwarning("Неверный ввод", "Количество строк должно быть положительным целым числом.")
             return
 
+        print(f"[GUI] Запуск теста памяти с {num_rows} строками через внешний скрипт...")
+
         # Проверяем параметры подключения к БД
         if not all([self.db_host_var.get(), self.db_port_var.get(),
                     self.db_name_var.get(), self.db_user_var.get()]):
             # Используем дефолтные параметры
+            print("[GUI] Используем дефолтные параметры БД")
             self.db_host_var.set(self.default_db_params['host'])
             self.db_port_var.set(self.default_db_params['port'])
             self.db_name_var.set(self.default_db_params['dbname'])
             self.db_user_var.set(self.default_db_params['user'])
             self.db_password_var.set(self.default_db_params['password'])
 
-        # Обновляем параметры подключения
+        # Обновляем параметры подключения для всех модулей
         import data_test
         data_test.DB_PARAMS = {
             'host': self.db_host_var.get(),
@@ -1099,82 +1098,81 @@ class NormalizationGUI:
             'user': self.db_user_var.get(),
             'password': self.db_password_var.get()
         }
-
-        # Также обновляем для memory_test
-        import memory_test
-        memory_test.connect = data_test.connect
-
-        orig_rel = self.normalization_result.original_relation
+        print(f"[GUI] Параметры БД: {data_test.DB_PARAMS}")
 
         # Создаем прогресс-диалог
         progress_window = tk.Toplevel(self.root)
         progress_window.title("Выполнение теста памяти")
-        progress_window.geometry("400x150")
+        progress_window.geometry("600x400")
         progress_window.transient(self.root)
         progress_window.grab_set()
 
-        ttk.Label(progress_window, text="Выполняется тест использования памяти...",
-                  font=("Arial", 10)).pack(pady=20)
-        progress_bar = ttk.Progressbar(progress_window, mode='indeterminate', length=300)
+        ttk.Label(progress_window, text=f"Выполняется тест памяти с {num_rows} строками...",
+                  font=("Arial", 12, "bold")).pack(pady=10)
+        
+        progress_bar = ttk.Progressbar(progress_window, mode='indeterminate', length=500)
         progress_bar.pack(pady=10)
         progress_bar.start(10)
 
-        status_label = ttk.Label(progress_window, text="Подготовка...")
+        status_label = ttk.Label(progress_window, text="Запуск внешнего скрипта...", wraplength=550)
         status_label.pack(pady=5)
 
-        # Запускаем тест в отдельном потоке
+        # Текстовое поле для вывода логов
+        log_frame = ttk.LabelFrame(progress_window, text="Логи выполнения")
+        log_frame.pack(pady=10, padx=10, fill='both', expand=True)
+        
+        log_text = scrolledtext.ScrolledText(log_frame, font=("Consolas", 9), wrap=tk.WORD)
+        log_text.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # Запускаем внешний скрипт в отдельном потоке
         import threading
-        results = {}
-        error = None
+        import subprocess
+        import sys
+        import os
 
-        def run_test():
-            nonlocal results, error
+        def run_external_script():
             try:
-                import io
-                from contextlib import redirect_stdout
-
-                # Перехватываем вывод для отображения в статусе
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    results = run_memory_test(orig_rel, num_rows)
-
-                # Обновляем статус периодически
-                log_lines = buf.getvalue().split('\n')
-                for line in log_lines:
-                    if line.strip():
-                        progress_window.after(0, lambda l=line: status_label.config(text=l[:50] + "..."))
-
+                status_label.config(text="Запуск simple_memory_test.py...")
+                log_text.insert(tk.END, f"[GUI] Запуск: python simple_memory_test.py\n")
+                log_text.see(tk.END)
+                
+                # Просто запускаем скрипт без перехвата вывода
+                script_path = os.path.join(os.getcwd(), "simple_memory_test.py")
+                return_code = subprocess.call([sys.executable, script_path], cwd=os.getcwd())
+                
+                if return_code == 0:
+                    status_label.config(text="Тест завершен успешно!")
+                    log_text.insert(tk.END, "\n✅ ТЕСТ ПАМЯТИ ЗАВЕРШЕН УСПЕШНО!\n")
+                    log_text.insert(tk.END, "Результаты и графики отображены в отдельных окнах.\n")
+                else:
+                    status_label.config(text=f"Ошибка выполнения (код: {return_code})")
+                    log_text.insert(tk.END, f"\n❌ ОШИБКА ВЫПОЛНЕНИЯ (код: {return_code})\n")
+                
+                log_text.see(tk.END)
+                
             except Exception as e:
-                error = str(e)
-                import traceback
-                traceback.print_exc()
+                error_msg = f"Ошибка запуска скрипта: {e}"
+                status_label.config(text=error_msg)
+                log_text.insert(tk.END, f"\n❌ {error_msg}\n")
+                log_text.see(tk.END)
+            finally:
+                progress_bar.stop()
 
-        # Запускаем тест
-        test_thread = threading.Thread(target=run_test)
+        # Запускаем в отдельном потоке
+        test_thread = threading.Thread(target=run_external_script, daemon=True)
         test_thread.start()
 
-        # Ждем завершения
-        def check_completion():
-            if test_thread.is_alive():
-                progress_window.after(100, check_completion)
-            else:
-                progress_bar.stop()
-                progress_window.destroy()
+        # Кнопка закрытия
+        button_frame = ttk.Frame(progress_window)
+        button_frame.pack(pady=10)
+        
+        def close_window():
+            progress_bar.stop()
+            progress_window.destroy()
+        
+        ttk.Button(button_frame, text="Закрыть", command=close_window).pack()
 
-                if error:
-                    messagebox.showerror("Ошибка", f"Ошибка при выполнении теста памяти:\n{error}")
-                elif results:
-                    # Показываем результаты
-                    self.show_memory_test_results(results)
-                    # Строим графики
-                    try:
-                        plot_memory_usage(results)
-                    except Exception as e:
-                        print(f"Ошибка при построении графиков: {e}")
-                else:
-                    messagebox.showwarning("Ошибка", "Не удалось получить результаты теста")
-
-        progress_window.after(100, check_completion)
+        print("[GUI] Внешний скрипт запущен...")
 
     def show_memory_test_results(self, results: Dict[str, Dict[str, int]]):
         """Показать результаты теста памяти в отдельном окне"""
@@ -1401,7 +1399,7 @@ class NormalizationGUI:
         about_text = """Программа автоматической нормализации реляционных БД
 
 Версия: 1.1
-Автор: Зуев Тимофей, ИУ7-85Б (доработано Gemini)
+Автор: Зуев Тимофей, ИУ7-85Б ()
 
 Программа позволяет:
 - Вводить атрибуты и функциональные зависимости
